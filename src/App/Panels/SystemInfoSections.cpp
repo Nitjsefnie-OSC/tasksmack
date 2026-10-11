@@ -1155,6 +1155,10 @@ std::string formatAdapterSummary(const Platform::NetworkAdapter& adapter)
     {
         text += ", driver " + adapter.driver;
     }
+    if (!adapter.description.empty())
+    {
+        text += ", " + adapter.description;
+    }
     return text;
 }
 
@@ -1540,6 +1544,20 @@ std::string formatAdapterAddresses(const Platform::NetworkAdapter& adapter)
     return text;
 }
 
+std::string formatWifiSignal(const Platform::NetworkAdapter& adapter)
+{
+    const std::optional<std::uint32_t> quality = adapter.wifiLink.has_value() ? adapter.wifiLink->signalQuality : std::nullopt;
+    if (adapter.wifiSignalDbm.has_value() && quality.has_value())
+    {
+        return std::format("{} dBm ({}%)", *adapter.wifiSignalDbm, *quality);
+    }
+    if (adapter.wifiSignalDbm.has_value())
+    {
+        return std::format("{} dBm", *adapter.wifiSignalDbm);
+    }
+    return quality.has_value() ? std::format("{}%", *quality) : std::string{};
+}
+
 std::string formatWifiLink(const Platform::WifiLink& link)
 {
     std::string text;
@@ -1551,6 +1569,10 @@ std::string formatWifiLink(const Platform::WifiLink& link)
         }
         text += part;
     };
+    if (!link.phy.empty())
+    {
+        append(link.phy);
+    }
     const std::uint32_t mhz = link.frequencyMhz;
     // The channel numbering of IEEE 802.11: 2.4 GHz from 2407 MHz (channel 14 apart, at 2484), 5 GHz
     // from 5000 MHz, 6 GHz from 5950 MHz (channel 2 apart, at 5935), 5 MHz a channel.
@@ -1578,9 +1600,29 @@ std::string formatWifiLink(const Platform::WifiLink& link)
     {
         append(std::format("{} MHz", mhz));
     }
-    if (link.bitrateKbps != 0)
+    else if (link.channel != 0)
     {
-        append(UI::Format::formatFixedLocalized(static_cast<double>(link.bitrateKbps) / 1000.0, 1, " Mbit/s"));
+        append(std::format("channel {}", link.channel)); // Windows, when the frequency couldn't be read
+    }
+    const auto rate = [](std::uint32_t kbps)
+    {
+        return UI::Format::formatFixedLocalized(static_cast<double>(kbps) / 1000.0, 1, " Mbit/s");
+    };
+    if (link.rxBitrateKbps == 0)
+    {
+        if (link.bitrateKbps != 0)
+        {
+            append(rate(link.bitrateKbps));
+        }
+    }
+    else
+    {
+        // Windows reports both directions; Linux only the transmit rate, shown alone as before.
+        if (link.bitrateKbps != 0)
+        {
+            append(rate(link.bitrateKbps) + " transmit");
+        }
+        append(rate(link.rxBitrateKbps) + " receive");
     }
     return text;
 }
@@ -1678,7 +1720,10 @@ Section buildNetworkAdaptersSection(const Platform::NetworkAdaptersInfo& network
 
     if (network.adapters.empty())
     {
-        rows.push_back(row("Adapters", network.listed ? "None found" : "", "/sys/class/net couldn't be listed"));
+        rows.push_back(
+            row("Adapters",
+                network.listed ? "None found" : "",
+                network.family == Platform::OsFamily::Windows ? "GetAdaptersAddresses failed" : "/sys/class/net couldn't be listed"));
         return section;
     }
     for (const Platform::NetworkAdapter& adapter : network.adapters)
@@ -1688,6 +1733,13 @@ Section buildNetworkAdaptersSection(const Platform::NetworkAdaptersInfo& network
         if (adapter.dhcpLease)
         {
             rows.push_back(row(adapter.name + " DHCP lease", formatDhcpLease(*adapter.dhcpLease)));
+        }
+        else if (adapter.dhcpEnabled.has_value())
+        {
+            // Windows says whether the adapter asks DHCP at all, so the one row can say why there is no lease.
+            rows.push_back(row(adapter.name + " DHCP lease",
+                               *adapter.dhcpEnabled ? std::string{} : std::string("None: a static IPv4 address"),
+                               "DHCP is on, but no lease is held (not connected)"));
         }
         // Its own DNS settings, only where it has any: otherwise the system-wide servers above apply.
         const auto joined = [](const std::vector<std::string>& items)
@@ -1712,11 +1764,14 @@ Section buildNetworkAdaptersSection(const Platform::NetworkAdaptersInfo& network
         {
             rows.push_back(row(adapter.name + " MAC address", adapter.mac, NOT_REPORTED, true));
         }
+        // Windows only so far: Linux leaves these empty, so their rows are left out there.
+        if (!adapter.gateways.empty())
+        {
+            rows.push_back(row(adapter.name + " gateways", joined(adapter.gateways)));
+        }
         if (adapter.wireless)
         {
-            rows.push_back(row(adapter.name + " Wi-Fi signal",
-                               adapter.wifiSignalDbm.has_value() ? std::format("{} dBm", *adapter.wifiSignalDbm) : std::string{},
-                               "Not reported by the driver, or not connected"));
+            rows.push_back(row(adapter.name + " Wi-Fi signal", formatWifiSignal(adapter), "Not reported by the driver, or not connected"));
             // The network's name can place the machine, like a MAC address: an identifier.
             const std::string_view linkReason = adapter.wifiLinkUnavailable.empty() ? NOT_REPORTED : adapter.wifiLinkUnavailable;
             rows.push_back(

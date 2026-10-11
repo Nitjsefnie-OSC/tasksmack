@@ -536,6 +536,12 @@ struct WifiLink
     std::string ssid;               ///< The network's name, made safe to draw; an identifier (it can place the machine)
     std::uint32_t frequencyMhz = 0; ///< The channel's centre frequency; 0 when unknown
     std::uint32_t bitrateKbps = 0;  ///< The current transmit rate in kbit/s; 0 when unknown
+
+    // Windows only so far: Linux leaves these empty.
+    std::optional<std::uint32_t> signalQuality; ///< 0-100 %, Windows' own measure of the signal
+    std::string phy;                            ///< The standard: "802.11ax (Wi-Fi 6)"
+    std::uint32_t channel = 0;                  ///< The channel when frequencyMhz isn't known; 0 when unknown
+    std::uint32_t rxBitrateKbps = 0;            ///< The current receive rate in kbit/s; 0 when unknown
 };
 
 /// An adapter's IPv4 DHCP lease (#1518): who gave the address, for how long, and until when.
@@ -549,7 +555,7 @@ struct DhcpLease
 /// One network adapter's configuration (#1518). A fact the probe couldn't read is empty or 0.
 struct NetworkAdapter
 {
-    std::string name; ///< "eth0", "wlp3s0"
+    std::string name; ///< "eth0", "wlp3s0"; Windows: the connection's name, "Ethernet", "Wi-Fi"
     std::string mac;  ///< "a4:5e:60:12:34:56"; an identifier
     std::uint32_t mtu = 0;
     std::string driver; ///< "e1000e", "iwlwifi"
@@ -559,22 +565,33 @@ struct NetworkAdapter
     std::optional<int> wifiSignalDbm; ///< Wi-Fi: the signal level, when the driver reports one.
     std::optional<WifiLink> wifiLink; ///< Wi-Fi: the link, when it is connected and could be read.
     std::string wifiLinkUnavailable;  ///< Wi-Fi: why wifiLink is empty, for the UI; empty when unknown.
-    /// Linux: the DNS servers set for this adapter alone (systemd-resolved's per-link servers, which
-    /// NetworkManager and systemd-networkd hand it); empty when there are none or they couldn't be read.
+    /// The DNS servers set for this adapter alone; empty when there are none or they couldn't be read.
+    /// Linux: systemd-resolved's per-link servers (which NetworkManager and systemd-networkd hand it).
+    /// Windows: the adapter's DNS servers from GetAdaptersAddresses.
     std::vector<std::string> linkDnsServers;
-    /// Linux: this adapter's own search domains; a routing-only one is written "~corp.example", as
-    /// resolvectl writes it.
+    /// This adapter's own search domains; they can name the organisation. Linux: a routing-only one is
+    /// written "~corp.example", as resolvectl writes it. Windows: the connection-specific DNS suffix,
+    /// then the adapter's DNS suffix search list.
     std::vector<std::string> linkSearchDomains;
-    /// Linux: the IPv4 DHCP lease NetworkManager holds for this adapter; none when its address isn't
-    /// from DHCP, or NetworkManager doesn't manage it.
+    /// The IPv4 DHCP lease, when the address came from one. Linux: the one NetworkManager holds for this
+    /// adapter (none when NetworkManager doesn't manage it). Windows: the server and the expiry from
+    /// GetAdaptersAddresses (the lease's length isn't reported, so leaseSeconds stays 0).
     std::optional<DhcpLease> dhcpLease;
+
+    // Windows only so far: Linux leaves these empty, and their rows out.
+    std::string description;           ///< The adapter's hardware, "Intel(R) Wi-Fi 6E AX211 160MHz"
+    std::vector<std::string> gateways; ///< This adapter's default gateways
+    /// Whether IPv4 is configured by DHCP; unset when not known. Says "static" for an adapter without
+    /// a dhcpLease, and "no lease yet" for one that asks DHCP but holds none.
+    std::optional<bool> dhcpEnabled;
 };
 
 /// The Network adapters facts (#1518): each adapter's addresses and settings, the default gateways
 /// and the DNS servers.
 struct NetworkAdaptersInfo
 {
-    bool available = false;               ///< The probe read the section at all.
+    bool available = false; ///< The probe read the section at all.
+    OsFamily family = OsFamily::Unknown;
     bool listed = false;                  ///< The adapters could be listed: an empty `adapters` means none.
     std::vector<NetworkAdapter> adapters; ///< By name; the loopback adapter is left out.
     std::string gatewayV4;                ///< The IPv4 default gateway; empty when there is none or it is unknown.

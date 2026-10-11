@@ -61,6 +61,7 @@
 #include "WindowsGraphics.h"
 #include "WindowsHandles.h"
 #include "WindowsInstalledMemory.h"
+#include "WindowsNetworkAdapters.h"
 #include "WindowsOsInfoMath.h"
 #include "WindowsPlatformSecurity.h"
 #include "WindowsServiceConfig.h"
@@ -1273,6 +1274,13 @@ BootPerformanceInfo WindowsSystemInfoProbe::readBootPerformance()
 {
     BootPerformanceInfo info;
     WindowsBootPerformance::readBootPerformance(info, WindowsBootPerformance::systemFunctions());
+    return info;
+}
+
+NetworkAdaptersInfo WindowsSystemInfoProbe::readNetworkAdapters()
+{
+    NetworkAdaptersInfo info;
+    WindowsNetworkAdapters::readNetworkAdapters(info, WindowsNetworkAdapters::systemFunctions());
     return info;
 }
 

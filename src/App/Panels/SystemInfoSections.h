@@ -228,8 +228,13 @@ struct VisibleSection
 /// An adapter's addresses: "192.168.1.20/24, fe80::1c2a:3bff:fe4d:5e6f/64", IPv4 first.
 [[nodiscard]] std::string formatAdapterAddresses(const Platform::NetworkAdapter& adapter);
 
-/// A Wi-Fi link's band, channel and rate: "5 GHz, channel 36, 866.7 Mbit/s", unknown parts left out; a
-/// frequency outside the 2.4, 5 and 6 GHz Wi-Fi channels is shown in MHz.
+/// A Wi-Fi adapter's signal: "-55 dBm (82%)" (the quality is Windows'), or whichever of the two was read;
+/// empty for neither.
+[[nodiscard]] std::string formatWifiSignal(const Platform::NetworkAdapter& adapter);
+
+/// A Wi-Fi link's standard, band, channel and rate: "5 GHz, channel 36, 866.7 Mbit/s" (Linux),
+/// "802.11ax (Wi-Fi 6), 5 GHz, channel 36, 866.7 Mbit/s transmit, 780.0 Mbit/s receive" (Windows),
+/// unknown parts left out; a frequency outside the 2.4, 5 and 6 GHz Wi-Fi channels is shown in MHz.
 [[nodiscard]] std::string formatWifiLink(const Platform::WifiLink& link);
 
 /// A DHCP lease: "From 192.168.1.1, 1 day lease, expires <local date and time>", unknown parts left out.

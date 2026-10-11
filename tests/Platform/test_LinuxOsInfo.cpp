@@ -1058,7 +1058,15 @@ TEST(LinuxNetworkAdaptersTest, AsksTheWifiReaderOnlyForWirelessAdapters)
         LinuxNetworkAdapters::WifiLinkRead read;
         if (adapter == "wlp3s0")
         {
-            read.link = WifiLink{.ssid = "home", .frequencyMhz = 2437, .bitrateKbps = 144'400};
+            read.link = WifiLink{
+                .ssid = "home",
+                .frequencyMhz = 2437,
+                .bitrateKbps = 144'400,
+                .signalQuality = std::nullopt,
+                .phy = "",
+                .channel = 0,
+                .rxBitrateKbps = 0,
+            };
         }
         else
         {
