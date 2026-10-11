@@ -2,6 +2,7 @@
 
 #include "App/Panels/ProcessTableLayout.h"
 #include "App/Panels/SystemInfoSections.h"
+#include "Domain/SamplingConfig.h"
 #include "Domain/SystemInfoModel.h"
 #include "Platform/ISystemInfoProbe.h"
 #include "UI/ChromeWidgets.h"
@@ -9,12 +10,14 @@
 #include "UI/Format.h"
 #include "UI/IconsFontAwesome6.h"
 #include "UI/LineLayout.h"
+#include "UI/Sparkline.h"
 #include "UI/Theme.h"
 
 #include <imgui.h>
 // imgui_stdlib.h extends imgui.h's API for std::string, so it follows it.
 #include <algorithm>
 #include <cstddef>
+#include <map>
 #include <string>
 #include <string_view>
 #include <utility>
@@ -110,9 +113,36 @@ void renderValue(const SystemInfo::Row& row, const UI::ColorScheme& scheme)
     }
 }
 
+/// A sensor kind's chart colour: the GPU tab's for temperature and fan speed, the power charts' for
+/// power, and accents for the rest.
+[[nodiscard]] const ImVec4& sensorColor(Platform::SensorKind kind, const UI::ColorScheme& scheme)
+{
+    switch (kind)
+    {
+    case Platform::SensorKind::Temperature:
+        return scheme.gpuTemperature;
+    case Platform::SensorKind::Fan:
+        return scheme.gpuFan;
+    case Platform::SensorKind::Power:
+        return scheme.chartPower;
+    case Platform::SensorKind::Voltage:
+        return scheme.accents[0];
+    case Platform::SensorKind::Current:
+        return scheme.accents[1];
+    }
+    return scheme.accents[0];
+}
+
+/// The width of the Sensors section's sparkline column, in ems.
+constexpr float SPARKLINE_WIDTH_EM = 10.0F;
+
 /// A section: its header with a Copy button at the right, then a two-column table of its visible rows.
 /// Every section's label column is @p labelWidth wide, so the values line up down the page.
-void renderSection(const SystemInfo::VisibleSection& visible, float labelWidth, SystemInfoViewState& state, const UI::ColorScheme& scheme)
+void renderSection(const SystemInfo::VisibleSection& visible,
+                   float labelWidth,
+                   const std::map<std::string, Domain::SensorHistory>& sensorHistories,
+                   SystemInfoViewState& state,
+                   const UI::ColorScheme& scheme)
 {
     const SystemInfo::Section& section = state.sections[visible.section];
     ImGui::PushID(static_cast<int>(visible.section));
@@ -126,11 +156,27 @@ void renderSection(const SystemInfo::VisibleSection& visible, float labelWidth, 
     }
     ImGui::SetItemTooltip("Copy this section as plain text");
 
-    constexpr ImGuiTableFlags TABLE_FLAGS = ImGuiTableFlags_RowBg | ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_SizingFixedFit;
-    if (ImGui::BeginTable("##Rows", 2, TABLE_FLAGS))
+    // The Sensors section (#1522) has a third column: each sensor's recent history as a sparkline.
+    const auto history = [&](const SystemInfo::Row& row) -> const Domain::SensorHistory*
     {
+        if (!row.sensorKind.has_value())
+        {
+            return nullptr;
+        }
+        const auto it = sensorHistories.find(row.label);
+        return (it != sensorHistories.end() && !it->second.times.empty()) ? &it->second : nullptr;
+    };
+    const bool charts = std::ranges::any_of(visible.rows, [&](std::size_t index) { return history(section.rows[index]) != nullptr; });
+    constexpr ImGuiTableFlags TABLE_FLAGS = ImGuiTableFlags_RowBg | ImGuiTableFlags_NoBordersInBody | ImGuiTableFlags_SizingFixedFit;
+    if (ImGui::BeginTable("##Rows", charts ? 3 : 2, TABLE_FLAGS))
+    {
+        const float sparklineWidth = ImGui::GetFontSize() * SPARKLINE_WIDTH_EM;
         ImGui::TableSetupColumn("Label", ImGuiTableColumnFlags_WidthFixed, labelWidth);
         ImGui::TableSetupColumn("Value", ImGuiTableColumnFlags_WidthStretch);
+        if (charts)
+        {
+            ImGui::TableSetupColumn("History", ImGuiTableColumnFlags_WidthFixed, sparklineWidth);
+        }
         for (const std::size_t index : visible.rows)
         {
             const SystemInfo::Row& row = section.rows[index];
@@ -141,6 +187,18 @@ void renderSection(const SystemInfo::VisibleSection& visible, float labelWidth, 
             ImGui::PopStyleColor();
             ImGui::TableNextColumn();
             renderValue(row, scheme);
+            const Domain::SensorHistory* recent = charts ? history(row) : nullptr;
+            if (charts && ImGui::TableNextColumn() && recent != nullptr)
+            {
+                ImGui::PushID(static_cast<int>(index));
+                UI::Widgets::renderSparkline("##History",
+                                             recent->times,
+                                             recent->values,
+                                             static_cast<double>(Domain::Sampling::HISTORY_SECONDS_DEFAULT),
+                                             ImVec2(sparklineWidth, ImGui::GetTextLineHeight()),
+                                             sensorColor(row.sensorKind.value_or(Platform::SensorKind::Temperature), scheme));
+                ImGui::PopID();
+            }
         }
         ImGui::EndTable();
     }
@@ -186,7 +244,7 @@ SystemInfoViewResult renderSystemInfoView(const Domain::SystemInfoSnapshot* snap
         const float labelWidth = UI::LineLayout::labelColumnWidth(widestLabel, ImGui::GetFontSize());
         for (const auto& visible : state.visible)
         {
-            renderSection(visible, labelWidth, state, scheme);
+            renderSection(visible, labelWidth, snapshot->sensorHistories, state, scheme);
         }
         if (state.visible.empty())
         {
