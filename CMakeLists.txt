@@ -139,6 +139,7 @@ set(TASKSMACK_SOURCES
     src/App/SettingsLayer.cpp
     src/App/SelectOverride.cpp
     src/App/MainTabBarView.cpp
+    src/App/ShellHost.cpp
     src/App/ShellLayer.cpp
     src/App/StatusBarView.cpp
     src/App/SyntheticScenario.cpp
@@ -287,6 +288,7 @@ set(TASKSMACK_HEADERS
     src/UI/FontLoading.h
     src/UI/UILayer.h
     src/UI/RenderMetrics.h
+    src/App/ShellHost.h
     src/App/ShellLayer.h
     src/App/SyntheticScenario.h
     src/App/WindowOverride.h
