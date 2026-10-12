@@ -303,6 +303,7 @@ set(TASKSMACK_HEADERS
     src/UI/FontLoading.h
     src/UI/UILayer.h
     src/UI/RenderMetrics.h
+    src/UI/HistoryCsv.h
     src/App/ShellHost.h
     src/App/ShellLayer.h
     src/App/SyntheticScenario.h
