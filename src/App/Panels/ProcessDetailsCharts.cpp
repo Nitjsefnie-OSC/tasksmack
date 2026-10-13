@@ -83,7 +83,7 @@ constexpr const char* MEM_VIRTUAL_LABEL = "Virtual →";
 // System chart's "Peak Used" tracks "Used" (#1342). The Processes table keeps its short "Peak Mem"
 // header for width, as it does "Mem %".
 constexpr const char* MEM_PEAK_LABEL = "Peak Memory";
-constexpr const char* MEM_PERCENT_LABEL = "Mem %";
+constexpr const char* MEM_PERCENT_LABEL = "Mem %";                // the Processes table's column (#1878)
 constexpr const char* MEM_PRIVATE_LABEL = "Private";              // the Processes table's column (#1885)
 constexpr const char* MEM_SWAP_LABEL = "Swap";                    // the Processes table's column (#1885)
 constexpr const char* FAULTS_TOTAL_LABEL = "Page Faults (total)"; // the Processes table's Page Faults column (#1878)
@@ -1001,7 +1001,9 @@ void ProcessDetailsCharts::renderMemoryUsageSection(const ProcessChartContext& c
         };
     }
     // Private and Swap, the Processes table's columns (#1885), where the platform reads them: lines
-    // without bars, so listed in the strip like Peak, in their lines' colours.
+    // without bars, so listed in the strip like Peak, in their lines' colours. Windows fills neither --
+    // its private bytes are the commit charge the Virtual line already draws, and it has no per-process
+    // swap -- so both are left out there, as Shared is (#1035, #1879).
     if (ctx.hasPrivateBytes && ctx.snapshot != nullptr)
     {
         memoryExtras.at(memoryExtraCount++) = UI::Widgets::ValueStripEntry{
