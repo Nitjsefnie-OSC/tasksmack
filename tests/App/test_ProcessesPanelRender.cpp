@@ -24,6 +24,7 @@
 #include "Core/Event.h"
 #include "Domain/GPUModel.h"
 #include "Domain/SamplingConfig.h"
+#include "Mocks/FakeClipboard.h"
 #include "Mocks/MockGPUProbe.h"
 #include "Mocks/MockProbes.h"
 #include "Platform/GPUTypes.h"
@@ -64,6 +65,7 @@ class ProcessesPanelRenderTest : public ::testing::Test
     {
         m_ImGui = ImGui::CreateContext();
         m_ImPlot = ImPlot::CreateContext();
+        m_Clipboard.install(); // Copy PID: never the system clipboard, which other processes share (#1890)
         ImGuiIO& io = ImGui::GetIO();
         io.IniFilename = nullptr;
         io.LogFilename = nullptr;
@@ -334,6 +336,7 @@ class ProcessesPanelRenderTest : public ::testing::Test
 
   private:
     UserSettings m_Settings;
+    TestMocks::FakeClipboard m_Clipboard;
     ImGuiContext* m_ImGui = nullptr;
     ImPlotContext* m_ImPlot = nullptr;
 };
