@@ -35,6 +35,7 @@
 #include "Platform/IProcessProbe.h"
 #include "Platform/IProcessSecurity.h"
 #include "Platform/ISystemProbe.h"
+#include "Platform/IUdpTrafficCollector.h"
 #include "Platform/Synthetic/SyntheticWorkload.h"
 
 #include <chrono>
@@ -106,6 +107,9 @@ class Scenario
 
 [[nodiscard]] std::unique_ptr<Platform::IProcessProbe> makeProcessProbe(const Scenario* scenario);
 [[nodiscard]] std::unique_ptr<Platform::IProcessActions> makeProcessActions(const Scenario* scenario);
+/// The opt-in UDP collector (#1492): none with a scenario (synthetic processes send no real UDP), else
+/// the platform's (null on Linux).
+[[nodiscard]] std::shared_ptr<Platform::IUdpTrafficCollector> makeUdpTrafficCollector(const Scenario* scenario);
 /// With a scenario, a source with no icons: synthetic PIDs are not real processes, and some may be the
 /// PIDs of real ones, whose icons must not be shown for them (#1800).
 [[nodiscard]] std::unique_ptr<Platform::IProcessIconSource> makeProcessIconSource(const Scenario* scenario);

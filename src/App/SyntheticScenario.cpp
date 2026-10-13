@@ -18,6 +18,7 @@
 #include "Platform/IProcessProbe.h"
 #include "Platform/IProcessSecurity.h"
 #include "Platform/ISystemProbe.h"
+#include "Platform/IUdpTrafficCollector.h"
 #include "Platform/StorageTypes.h"
 #include "Platform/Synthetic/SyntheticProbes.h"
 #include "Platform/Synthetic/SyntheticWorkload.h"
@@ -331,6 +332,15 @@ std::unique_ptr<Platform::IProcessProbe> makeProcessProbe(const Scenario* scenar
         return std::make_unique<Platform::Synthetic::SyntheticProcessProbe>(scenario->workload());
     }
     return Platform::makeProcessProbe();
+}
+
+std::shared_ptr<Platform::IUdpTrafficCollector> makeUdpTrafficCollector(const Scenario* scenario)
+{
+    if (scenario != nullptr)
+    {
+        return nullptr;
+    }
+    return Platform::makeUdpTrafficCollector();
 }
 
 std::unique_ptr<Platform::IProcessActions> makeProcessActions(const Scenario* scenario)

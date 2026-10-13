@@ -908,11 +908,20 @@ void ProcessesPanel::onAttach()
     ProcessesPanelPlatform platform = m_MakePlatform ? m_MakePlatform()
                                                      : ProcessesPanelPlatform{.probe = Synthetic::makeProcessProbe(scenario),
                                                                               .actions = Synthetic::makeProcessActions(scenario),
+                                                                              .udpCollector = Synthetic::makeUdpTrafficCollector(scenario),
                                                                               .icons = Synthetic::makeProcessIconSource(scenario)};
     auto processProbe = std::move(platform.probe);
 
     const int socketStatsCacheTtlMs = UserConfig::get().settings().socketStatsCacheTtlMs;
     processProbe->setSocketStatsCacheTtl(std::chrono::milliseconds(socketStatsCacheTtlMs));
+
+    // The opt-in UDP event trace (#1492): the probe reads it, this panel starts and stops it.
+    m_UdpCollector = std::move(platform.udpCollector);
+    if (m_UdpCollector)
+    {
+        processProbe->setUdpTrafficCollector(m_UdpCollector);
+        applyUdpEventTrace(UserConfig::get().settings().udpEventTrace);
+    }
 
     m_ProcessModel = std::make_shared<Domain::ProcessModel>(std::move(processProbe));
 
@@ -1004,7 +1013,26 @@ void ProcessesPanel::onDetach()
         m_Sampler.reset();
     }
     this->m_InteractionHoldSeconds = 0.0F;
+    // The UDP event trace's session is stopped here, not left to whichever of the model and this
+    // panel lets the collector go last (#1492).
+    applyUdpEventTrace(false);
+    m_UdpCollector.reset();
     m_ProcessModel.reset();
+}
+
+void ProcessesPanel::applyUdpEventTrace(bool enabled)
+{
+    if (!m_UdpCollector)
+    {
+        return;
+    }
+    if (!enabled)
+    {
+        m_UdpCollector->stop();
+        return;
+    }
+    // Not elevated, or refused: the collector logs why, and the counters stay TCP only.
+    (void) m_UdpCollector->start();
 }
 
 void ProcessesPanel::onEvent(Core::Event& event)
@@ -1032,6 +1060,13 @@ void ProcessesPanel::onEvent(Core::Event& event)
         {
             // The startup value (#1079) is applied without forcing a sample right after the seed (#1102).
             setSamplingInterval(std::chrono::milliseconds(e.getIntervalMs()), !e.isInitial());
+            return false;
+        });
+    // The Settings toggle for the UDP event trace (#1492).
+    dispatcher.dispatch<Core::UdpEventTraceChangedEvent>(
+        [this](Core::UdpEventTraceChangedEvent& e)
+        {
+            applyUdpEventTrace(e.isEnabled());
             return false;
         });
     // This panel owns the process model, so it sets the model's history length (#1078).
