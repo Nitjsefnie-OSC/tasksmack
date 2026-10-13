@@ -10,14 +10,17 @@
 #include "Core/ApplicationEvents.h"
 #include "Core/Event.h"
 #include "Domain/Numeric.h"
+#include "Domain/ProcessServices.h"
 #include "Domain/ProcessSnapshot.h"
 #include "Domain/SamplingConfig.h"
+#include "Domain/ServiceModel.h"
 #include "Platform/IProcessActions.h"
 #include "Platform/IProcessConnections.h"
 #include "Platform/IProcessEnvironment.h"
 #include "Platform/IProcessModules.h"
 #include "Platform/IProcessOpenFiles.h"
 #include "Platform/IProcessSecurity.h"
+#include "Platform/IServiceProbe.h"
 #include "ProcessActionsBlock.h"
 #include "ProcessActionsView.h"
 #include "ProcessConnectionsView.h"
@@ -35,6 +38,7 @@
 #include "ProcessPriorityView.h"
 #include "ProcessSecurityView.h"
 #include "ProcessSmoothedUsage.h"
+#include "ServicesView.h"
 #include "UI/ChartWidgets.h"
 #include "UI/EmptyState.h"
 #include "UI/FillPlotLayout.h"
@@ -123,6 +127,10 @@ void ProcessDetailsPanel::updateWithSamples(std::span<const Domain::ProcessSampl
 
     // Fade out action result message
     m_ActionsView.tick(deltaTime);
+
+    // The Services section wants the service list kept current only while it was drawn open on the last
+    // frame (#1880): not while collapsed, on another Details tab, or with this tab hidden.
+    m_ServicesSectionOpen = std::exchange(m_ServicesDrawnOpen, false);
 
     if (m_SelectedPid == -1)
     {
@@ -246,6 +254,19 @@ void ProcessDetailsPanel::renderServicesSection(const Domain::ProcessSnapshot& p
     {
         return;
     }
+    // Open: ShellLayer keeps the service list current (#1880), whose display names and states are shown
+    // beside the names when it lists them (Windows; on Linux until systemd's list is read, the names alone).
+    m_ServicesDrawnOpen = true;
+    std::shared_ptr<const Domain::ServicePublication> list;
+    if (m_ServiceModel != nullptr)
+    {
+        list = m_ServiceModel->publication();
+        if (!Domain::ProcessServices::isCurrent(*list, std::chrono::steady_clock::now()))
+        {
+            list.reset();
+        }
+    }
+    const auto& scheme = UI::Theme::get().scheme();
     // One line per service ("a.service, b.service" on a platform that hosts several in one process).
     std::string_view rest = proc.services;
     while (!rest.empty())
@@ -256,6 +277,19 @@ void ProcessDetailsPanel::renderServicesSection(const Domain::ProcessSnapshot& p
         ImGui::PushID(name.c_str());
         ImGui::AlignTextToFramePadding();
         ImGui::TextUnformatted(name.c_str());
+        if (const Platform::ServiceInfo* service = (list != nullptr) ? Domain::findService(*list, name) : nullptr; service != nullptr)
+        {
+            if (!service->displayName.empty())
+            {
+                ImGui::SameLine();
+                ImGui::TextColored(scheme.textMuted, "%s", service->displayName.c_str());
+            }
+            ImGui::SameLine();
+            const std::string_view state = serviceStateLabel(service->state);
+            ImGui::PushStyleColor(ImGuiCol_Text, serviceStateColor(service->state, scheme));
+            ImGui::TextUnformatted(state.data(), state.data() + state.size());
+            ImGui::PopStyleColor();
+        }
         ImGui::SameLine();
         if (ImGui::SmallButton(ICON_FA_ARROW_RIGHT "  Show in Services"))
         {

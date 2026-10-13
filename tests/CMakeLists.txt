@@ -168,6 +168,7 @@ set(COMMON_TEST_SOURCES
     Domain/test_CrashHistory.cpp
     Domain/test_StorageModelAllocationFailure.cpp
     Domain/test_ServiceModel.cpp
+    Domain/test_ProcessServices.cpp
     Domain/test_BackgroundSampler.cpp
     Domain/test_PriorityConfig.cpp
     Domain/test_SamplingConfig.cpp

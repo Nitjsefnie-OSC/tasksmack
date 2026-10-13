@@ -10,9 +10,11 @@
 #include "Core/Event.h"
 #include "Domain/CrashHistory.h"
 #include "Domain/ProcessSnapshot.h"
+#include "Domain/ServiceModel.h"
 #include "Mocks/MockProbes.h"
 #include "Platform/CpuAffinity.h"
 #include "Platform/IProcessActions.h"
+#include "Platform/IServiceProbe.h"
 #include "Platform/ISystemInfoProbe.h"
 #include "Platform/ProcessTypes.h"
 #include "UI/IconsFontAwesome6.h"
@@ -322,6 +324,60 @@ TEST_F(ProcessDetailsPanelRenderTest, TheServicesSectionShowsTheServiceInTheServ
     static_cast<void>(renderAndCapture(*panel));
     static_cast<void>(renderAndCapture(*panel));
     EXPECT_EQ(shown, (std::vector<std::string>{"nginx.service"}));
+}
+
+// #1880: on Windows the section takes each service's display name and state from the service list, and
+// while it is open it asks for that list to be kept current.
+TEST_F(ProcessDetailsPanelRenderTest, TheServicesSectionShowsTheListsDisplayNamesAndStates)
+{
+    const auto panel = activePanel();
+    Platform::ServiceCapabilities listCaps;
+    listCaps.canEnumerate = true;
+    listCaps.hasPid = true;
+    listCaps.hasDisplayName = true;
+    auto probe = std::make_unique<TestMocks::MockServiceProbe>(listCaps);
+    Platform::ServiceInfo dhcp;
+    dhcp.name = "Dhcp";
+    dhcp.displayName = "DHCP Client";
+    dhcp.state = Platform::ServiceState::Running;
+    dhcp.pid = PID;
+    probe->setEnumeration(Platform::ServiceEnumeration::succeeded({dhcp}));
+    const auto serviceModel = std::make_shared<Domain::ServiceModel>(std::move(probe));
+    serviceModel->sample();
+    panel->setServiceModel(serviceModel);
+
+    panel->setSelectedPid(PID, START_TICKS);
+    Domain::ProcessSample sample = sampleAt(1.0, 10.0);
+    auto snapshot = std::make_shared<Domain::ProcessSnapshot>(*sample.snapshot);
+    snapshot->serviceNames = {"Dhcp"};
+    snapshot->services = "Dhcp";
+    sample.snapshot = std::move(snapshot);
+    const std::vector samples{sample};
+    panel->updateWithSamples(samples, 1.0F);
+    static_cast<void>(renderAndCapture(*panel));
+    EXPECT_FALSE(renderAndCapture(*panel).contains("DHCP Client")); // collapsed
+    panel->updateWithSamples({}, 1.0F);
+    EXPECT_FALSE(panel->servicesSectionOpen());
+
+    ImGuiWindow* content = nullptr;
+    int windowIndex = 0;
+    while (windowIndex < GImGui->Windows.Size)
+    {
+        const std::string_view name(GImGui->Windows[windowIndex]->Name);
+        if (const std::size_t at = name.find("##OverviewContent");
+            at != std::string_view::npos && name.find('/', at) == std::string_view::npos)
+        {
+            content = GImGui->Windows[windowIndex];
+        }
+        ++windowIndex;
+    }
+    ASSERT_NE(content, nullptr);
+    content->StateStorage.SetInt(ImHashStr("###ProcessServices", 0, content->ID), 1);
+    const std::string text = renderAndCapture(*panel);
+    EXPECT_TRUE(text.contains("DHCP Client")) << text;
+    EXPECT_TRUE(text.contains("Running")) << text;
+    panel->updateWithSamples({}, 1.0F);
+    EXPECT_TRUE(panel->servicesSectionOpen()); // open: ShellLayer keeps the list sampled
 }
 
 // #1395: a shorter history window trims the history already held, so the charts span the new window.

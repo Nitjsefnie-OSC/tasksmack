@@ -8,6 +8,7 @@
 #include "Domain/Numeric.h"
 #include "Domain/ProcessSnapshot.h"
 #include "Domain/SamplingConfig.h"
+#include "Domain/ServiceModel.h"
 #include "Platform/IProcessActions.h"
 #include "Platform/IProcessConnections.h"
 #include "Platform/IProcessEnvironment.h"
@@ -182,6 +183,20 @@ class ProcessDetailsPanel : public Panel
         m_KillShortcut.expire();
     }
 
+    /// The service list the Overview's Services section takes display names and states from (#1880), from
+    /// the composition root (ShellLayer: the Services panel's model). Null (the default): names alone.
+    void setServiceModel(std::shared_ptr<const Domain::ServiceModel> serviceModel) noexcept
+    {
+        m_ServiceModel = std::move(serviceModel);
+    }
+
+    /// Whether the Overview's Services section was drawn open on the last frame, as of the last
+    /// updateWithSamples() (#1880): ShellLayer then keeps the service list sampled.
+    [[nodiscard]] bool servicesSectionOpen() const noexcept
+    {
+        return m_ServicesSectionOpen;
+    }
+
     /// Test seam (#1886): events the panel raises (Show in Services) go to @p raise instead of
     /// Core::Application.
     void setEventSinkForTesting(std::function<void(Core::Event&)> raise)
@@ -258,6 +273,11 @@ class ProcessDetailsPanel : public Panel
     UI::Widgets::PlotFillState m_OverviewFill;
 
     std::function<void(Core::Event&)> m_RaiseEvent; // Set by the test seam only
+    // The Services section's display names and states (#1880), and whether it was drawn open: set by
+    // renderServicesSection(), taken into m_ServicesSectionOpen by updateWithSamples().
+    std::shared_ptr<const Domain::ServiceModel> m_ServiceModel;
+    bool m_ServicesDrawnOpen = false;
+    bool m_ServicesSectionOpen = false;
     bool m_HasSnapshot = false;
     bool m_ProcessExited = false; // Had a snapshot of the selected process, and it has gone missing (#927)
 

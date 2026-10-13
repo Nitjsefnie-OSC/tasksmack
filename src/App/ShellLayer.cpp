@@ -16,6 +16,7 @@
 #include "Platform/Factory.h"
 #include "Platform/ISystemInfoProbe.h"
 #include "Platform/ProcessTypes.h"
+#include "ProcessColumnConfig.h"
 #include "SelectOverride.h"
 #include "ShellHost.h"
 #include "ShellMetrics.h"
@@ -184,6 +185,16 @@ void ShellLayer::onAttach()
             processModel->setGPUModel(gpuModel);
             // Its probe also decides whether the GPU columns can be filled at all (#1210).
             m_ProcessesPanel.setGpuModel(gpuModel);
+        }
+
+        // The Services tab's list says which services each process hosts on Windows (#1880): the Services
+        // column, and the display names and states in Process Details' Services section. Sampled by the
+        // Services panel alone, while one of them or the tab needs it (onUpdate()). Not in synthetic runs:
+        // their processes are made up, and a real service's PID would match one by accident.
+        if (Synthetic::activeScenario() == nullptr)
+        {
+            processModel->setServiceModel(m_ServicesPanel.serviceModel());
+            m_ProcessDetailsPanel.setServiceModel(m_ServicesPanel.serviceModel());
         }
     }
 
@@ -400,6 +411,12 @@ void ShellLayer::onUpdate(float deltaTime)
         static_cast<void>(m_ProcessesPanel.watchedSamplesSince(m_ProcessDetailsPanel.lastSampleVersion(), m_PendingSamples));
     }
     m_ProcessDetailsPanel.updateWithSamples(m_PendingSamples, deltaTime);
+
+    // The service list is read while the Services tab is shown, and also while the Processes table
+    // shows its Services column or Process Details' Services section is open (#1880) -- at the tab's
+    // cadence, on its sampler, and not at all once none of them needs it. Only a change does anything.
+    m_ServicesPanel.setBackgroundDemand(m_ProcessesPanel.columnSettings().isVisible(ProcessColumn::Services) ||
+                                        m_ProcessDetailsPanel.servicesSectionOpen());
 
     // Debug: Log when GPU data becomes available for the selected PID.
     // This avoids spamming logs every frame while a GPU-using process is selected.
