@@ -3,6 +3,7 @@
 #include "App/KeyboardInput.h"
 #include "App/Panel.h"
 #include "App/Panels/AdaptiveIntervalUtils.h"
+#include "App/Panels/GpuSection.h"
 #include "App/Panels/ProcessActionConfirm.h"
 #include "App/Panels/ProcessActionsView.h"
 #include "App/Panels/ProcessBatchAction.h"
@@ -1835,13 +1836,20 @@ ProcessColumnAvailability::GpuSupport ProcessesPanel::gpuSupport() const
     // unknown, which counts as listed for the NPU columns' support, as unknown per-process support
     // counts as supported -- but not for NPU %'s default, which waits until one is known (#1870).
     const std::shared_ptr<const Domain::GPUPublication> publication = (gpuModel != nullptr) ? gpuModel->publication() : nullptr;
-    const bool acceleratorListed =
-        (publication != nullptr) && (!publication->acceleratorInfo.empty() || !publication->acceleratorSnapshots.empty());
+    // Known to be listed: the machine view's NPU tab's condition, which Process Details' NPU tab follows
+    // too (hasAccelerator(), #1869). False while there is no publication yet.
+    const bool acceleratorListed = GpuSection::showAcceleratorTab(publication.get());
     return ProcessColumnAvailability::gpuSupport(gpuModel != nullptr,
                                                  gpuModel != nullptr && gpuModel->perProcessMetricsKnownUnsupported(),
                                                  gpuModel != nullptr && gpuModel->perProcessUtilizationKnownUnsupported(),
                                                  (publication == nullptr) || acceleratorListed,
                                                  acceleratorListed);
+}
+
+bool ProcessesPanel::hasAccelerator() const
+{
+    // One condition with the NPU % column's default (#1870) and the machine view's NPU tab (#1799).
+    return gpuSupport().acceleratorListed;
 }
 
 bool ProcessesPanel::hasPerProcessGpuMetrics() const
