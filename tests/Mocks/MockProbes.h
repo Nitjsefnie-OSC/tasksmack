@@ -32,6 +32,7 @@
 #include <cstdint>
 #include <expected>
 #include <filesystem>
+#include <functional>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -1082,8 +1083,18 @@ class MockProcessEnvironmentReader : public Platform::IProcessEnvironmentReader
         return m_HasEnvironment;
     }
 
+    /// Runs @p hook at the start of every read, on the reader's thread (a test can block it there).
+    void setBeforeRead(std::function<void()> hook)
+    {
+        m_BeforeRead = std::move(hook);
+    }
+
     [[nodiscard]] Platform::EnvironmentReadResult readEnvironment(const Platform::ProcessTarget& target) override
     {
+        if (m_BeforeRead)
+        {
+            m_BeforeRead();
+        }
         ++m_ReadCount;
         m_LastTarget = target;
         return m_Result;
@@ -1104,6 +1115,7 @@ class MockProcessEnvironmentReader : public Platform::IProcessEnvironmentReader
     Platform::EnvironmentReadResult m_Result{.status = Platform::EnvironmentReadStatus::Ok, .variables = {}};
     int m_ReadCount = 0;
     Platform::ProcessTarget m_LastTarget{};
+    std::function<void()> m_BeforeRead;
 };
 
 // =============================================================================
