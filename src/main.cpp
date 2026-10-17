@@ -15,7 +15,7 @@
 #include "Core/Application.h"
 #include "Core/ConfigDirOverride.h"
 // NOLINTNEXTLINE(misc-include-cleaner) - used in the NDEBUG (release) branch below, invisible to debug-config analysis
-#include "Core/EnvUtils.h"
+#include "Core/EnvRead.h"
 #include "Core/LocaleSetup.h"
 #include "Core/LogFileSink.h"
 #include "Core/Utf8Path.h"
@@ -193,11 +193,11 @@ auto runApp() -> int
     // TASKSMACK_TRACE_RESIZE_PERF also promotes the level to info automatically.
     {
         spdlog::level::level_enum runtimeLevel = spdlog::level::warn;
-        if (const char* levelEnv = SDL_getenv("TASKSMACK_LOG_LEVEL"); levelEnv != nullptr)
+        if (const char* levelEnv = Core::readEnv(Core::LOG_LEVEL_ENV_VAR); levelEnv != nullptr)
         {
-            runtimeLevel = spdlog::level::from_str(levelEnv);
+            runtimeLevel = Core::logLevelFromEnv(levelEnv);
         }
-        else if (Core::isEnvFlagEnabled(SDL_getenv("TASKSMACK_TRACE_RESIZE_PERF")))
+        else if (Core::resizePerfTraceRequested())
         {
             runtimeLevel = spdlog::level::info;
         }

@@ -4,7 +4,7 @@
 #include "App/TitleBarView.h"
 #include "Core/Application.h"
 #include "Core/ApplicationEvents.h"
-#include "Core/EnvUtils.h"
+#include "Core/EnvRead.h"
 #include "Core/Layer.h"
 #include "Core/ResizePerfOperation.h"
 #include "Core/Utf8Path.h"
@@ -198,7 +198,7 @@ void TitleBarLayer::onAttach()
     // The icon texture is loaded by the first renderTitleBar(), at the size the bar draws it; ImGui
     // only knows the framebuffer scale from the first frame on (#1169).
 
-    m_TraceEnabled = Core::isEnvFlagEnabled(SDL_getenv("TASKSMACK_TRACE_RESIZE_PERF"));
+    m_TraceEnabled = Core::resizePerfTraceRequested();
 
     // Set up hit test for window dragging
     setupHitTest();
