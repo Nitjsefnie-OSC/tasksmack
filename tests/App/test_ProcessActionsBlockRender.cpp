@@ -429,6 +429,7 @@ TEST_F(ProcessActionsBlockRenderTest, SetAffinityFromTheCardOpensTheDialogAndApp
     for (int i = 0; i < 3 && h.mock.setAffinityCount() == 0; ++i)
     {
         static_cast<void>(runFrame(body));
+        h.actionsView.waitForActionForTesting(); // the change runs on the action worker (#2305)
     }
     EXPECT_EQ(h.mock.setAffinityCount(), 1);
     EXPECT_EQ(h.mock.lastAffinity(), Platform::CpuAffinity::fromMask(0b111U));
@@ -481,6 +482,7 @@ TEST_F(ProcessActionsBlockRenderTest, ConfirmingActsAndShowsTheResultAndCancelli
     ASSERT_NE(modal, nullptr);
     ImGui::ActivateItemByID(ImHashStr("##filled", 0, ImHashStr("Kill", 0, modal->ID)));
     (void) runFrame(body);
+    h.actionsView.waitForActionForTesting(); // the kill runs on the action worker (#2305)
     (void) runFrame(body);
     EXPECT_EQ(h.mock.killCount(), 1);
     EXPECT_FALSE(h.actionsView.lastResult().text.empty());
