@@ -285,6 +285,53 @@ using JournalReader = std::function<JournalRead(std::uint64_t sinceUsec, std::si
 
 /// A journal entry as its crash; nullopt when it names no process. @p coreFile receives the kept core
 /// file's path (as the journal gives it, absolute), or stays empty when none was kept.
+/// Whether a journal entry carrying systemd-coredump's message ID was written by systemd-coredump itself
+/// (#2382). Any user can log an entry with that message ID and made-up COREDUMP_* fields, so it is judged
+/// by the fields journald sets from the sender, which a client can't: "_EXE" (the sender's executable)
+/// must be systemd-coredump, and "_UID" root, @p coredumpUid (the systemd-coredump user it may drop to),
+/// or the crashed process's own COREDUMP_UID (it may drop to that user; and its --backtrace mode lets any
+/// user report, but only as themselves).
+[[nodiscard]] inline bool isTrustedCoredumpEntry(const JournalFields& fields, std::optional<std::uint32_t> coredumpUid)
+{
+    const std::string_view exe = journalField(fields, "_EXE");
+    const std::size_t slash = exe.rfind('/');
+    if (slash == std::string_view::npos || exe.substr(slash + 1) != "systemd-coredump")
+    {
+        return false;
+    }
+    std::uint32_t sender = 0;
+    const std::string_view senderText = journalField(fields, "_UID");
+    if (senderText.empty() || std::from_chars(senderText.data(), senderText.data() + senderText.size(), sender).ec != std::errc{})
+    {
+        return false;
+    }
+    if (sender == 0 || (coredumpUid.has_value() && sender == *coredumpUid))
+    {
+        return true;
+    }
+    std::uint32_t crashed = 0;
+    const std::string_view crashedText = journalField(fields, "UID");
+    return !crashedText.empty() &&
+           std::from_chars(crashedText.data(), crashedText.data() + crashedText.size(), crashed).ec == std::errc{} && crashed == sender;
+}
+
+/// Whether @p coreFile, a journal entry's COREDUMP_FILENAME, names a file in COREDUMP_DIR: only such a file
+/// is looked at (#2382), so an entry can't have its size read from anywhere else.
+[[nodiscard]] inline bool isCoredumpDirFile(std::string_view coreFile)
+{
+    // A POSIX path as the journal holds it, compared as text (std::filesystem::path would judge it by the
+    // host's rules: on Windows, where the fixture tests also run, "/var/..." isn't absolute). One file
+    // name after the directory, with no '/' in it, so no ".." can climb out.
+    constexpr std::string_view DIR_PREFIX = "/var/lib/systemd/coredump/";
+    static_assert(DIR_PREFIX.substr(1, DIR_PREFIX.size() - 2) == COREDUMP_DIR);
+    if (!coreFile.starts_with(DIR_PREFIX))
+    {
+        return false;
+    }
+    const std::string_view name = coreFile.substr(DIR_PREFIX.size());
+    return !name.empty() && name != "." && name != ".." && !name.contains('/');
+}
+
 [[nodiscard]] inline std::optional<CrashEvent> crashFromJournal(const JournalFields& fields, std::string& coreFile)
 {
     const auto number = []<typename T>(std::string_view text, T& value)
@@ -359,7 +406,7 @@ inline void readCrashFacts(const std::filesystem::path& root,
         {
             continue;
         }
-        if (!coreFile.empty())
+        if (!coreFile.empty() && isCoredumpDirFile(coreFile))
         {
             std::error_code sizeEc;
             const std::uintmax_t bytes = std::filesystem::file_size(root / std::filesystem::path(coreFile).relative_path(), sizeEc);
