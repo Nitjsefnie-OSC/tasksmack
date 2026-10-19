@@ -390,6 +390,7 @@ set(COMMON_TEST_SOURCES
     App/test_ProcessSmoothedUsage.cpp
     App/test_ProcessActionHelpers.cpp
     App/test_ProcessActionsView.cpp
+    App/test_AuthorizeWording.cpp
     App/test_ProcessDumpView.cpp
     App/test_ProcessActionConfirmPopup.cpp
     App/test_ProcessActionsBlockRender.cpp
@@ -725,6 +726,7 @@ add_executable(TaskSmackTests
     ${CMAKE_SOURCE_DIR}/src/App/ShellLayer.cpp
     ${CMAKE_SOURCE_DIR}/src/App/ShellPanels.cpp
     ${CMAKE_SOURCE_DIR}/src/App/PanelPlatforms.cpp
+    ${CMAKE_SOURCE_DIR}/src/App/NativeWindow.cpp
     ${CMAKE_SOURCE_DIR}/src/App/Panels/SystemInfoPanel.cpp
     ${CMAKE_SOURCE_DIR}/src/App/WindowOverride.cpp
     # The custom title bar (#1547), run headless (test_TitleBarViewRender.cpp)
@@ -891,6 +893,7 @@ if(TARGET TaskSmackHelper)
         ${CMAKE_SOURCE_DIR}/src/Platform/Windows/BrokerHelper.cpp
         ${CMAKE_SOURCE_DIR}/src/Platform/Windows/BrokerPipe.cpp
         ${CMAKE_SOURCE_DIR}/src/Platform/Windows/BrokerPipeServer.cpp
+        ${CMAKE_SOURCE_DIR}/src/Platform/Windows/WindowsElevation.cpp # HelperLauncher::availability()
         ${CMAKE_SOURCE_DIR}/src/Platform/Windows/WindowsProcessIdentity.cpp
         ${CMAKE_SOURCE_DIR}/src/Platform/Windows/WinString.cpp
     )

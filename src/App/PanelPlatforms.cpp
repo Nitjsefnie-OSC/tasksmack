@@ -1,5 +1,6 @@
 #include "PanelPlatforms.h"
 
+#include "NativeWindow.h"
 #include "Panels/ProcessDetailsPanel.h"
 #include "Panels/ProcessesPanel.h"
 #include "Panels/ServicesPanel.h"
@@ -23,10 +24,12 @@ namespace
 {
 
 /// The one privileged broker every real run's IProcessActions shares (#2308): made once, on first use,
-/// and started only when the user first chooses "Authenticate and retry". Null where there is none.
+/// and started only when the user first chooses "Authenticate and retry" ("Retry as administrator" on
+/// Windows). Null where there is none. Its prompt belongs to the main window (#2550), which exists
+/// before any panel asks for this.
 [[nodiscard]] const std::shared_ptr<Platform::IPrivilegedBroker>& sharedPrivilegedBroker()
 {
-    static const std::shared_ptr<Platform::IPrivilegedBroker> broker = Platform::makePrivilegedBroker();
+    static const std::shared_ptr<Platform::IPrivilegedBroker> broker = Platform::makePrivilegedBroker(mainNativeWindow());
     return broker;
 }
 
