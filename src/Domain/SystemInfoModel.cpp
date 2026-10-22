@@ -7,7 +7,6 @@
 #include <chrono>
 #include <cstdint>
 #include <exception>
-#include <map>
 #include <memory>
 #include <mutex>
 #include <optional>
@@ -18,17 +17,6 @@
 
 namespace Domain
 {
-
-namespace
-{
-
-/// Now, as the sensor histories time their readings: steady_clock seconds.
-[[nodiscard]] double steadySeconds()
-{
-    return std::chrono::duration<double>(std::chrono::steady_clock::now().time_since_epoch()).count();
-}
-
-} // namespace
 
 SystemInfoModel::SystemInfoModel(std::unique_ptr<Platform::ISystemInfoProbe> probe, std::shared_ptr<CrashHistory> crashHistory)
     : m_Probe(std::move(probe)), m_CrashHistory(std::move(crashHistory))
@@ -80,9 +68,6 @@ void SystemInfoModel::read(const std::stop_token& stopToken)
             next->publicIp = m_Probe->readPublicIp();
         }
     }
-    m_Sensors.add(next->sensors, steadySeconds());
-    next->sensorRanges = m_Sensors.ranges();
-    next->sensorHistories = m_Sensors.histories();
     if (m_CrashHistory && m_Capabilities.hasOs)
     {
         // Process Details' crash line (#1675) shows this read too, without a second one of its own.
@@ -114,27 +99,6 @@ template<typename ReadFn> [[nodiscard]] std::optional<std::string> tryReading(Re
 }
 
 } // namespace
-
-void SystemInfoModel::readSensors()
-{
-    const std::scoped_lock lock(m_ReadMutex);
-    if (!m_Capabilities.hasOs || m_LastVersion == 0)
-    {
-        return; // nothing to keep the other facts of yet
-    }
-    auto next = std::make_shared<SystemInfoSnapshot>(*m_Slot.load());
-    next->sensors = m_Probe->readSensors();
-    m_Sensors.add(next->sensors, steadySeconds());
-    next->sensorRanges = m_Sensors.ranges();
-    next->sensorHistories = m_Sensors.histories();
-    next->version = ++m_LastVersion;
-    m_Slot.commit(std::move(next));
-}
-
-std::optional<std::string> SystemInfoModel::tryReadSensors()
-{
-    return tryReading([this] { readSensors(); });
-}
 
 std::optional<std::string> SystemInfoModel::tryRead(const std::stop_token& stopToken)
 {

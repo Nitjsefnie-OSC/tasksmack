@@ -2,6 +2,7 @@
 
 #include "App/Panels/ServicesView.h"
 #include "Core/GraphicsHostInfo.h"
+#include "Domain/SensorModel.h"
 #include "Domain/SensorTracker.h"
 #include "Domain/SystemInfoModel.h"
 #include "Platform/IServiceProbe.h"
@@ -1232,7 +1233,7 @@ std::string formatSensorRange(const Platform::SensorReading& reading, const Doma
 
 Section buildSensorsSection(const Platform::SensorsInfo& sensors, const std::map<std::string, Domain::SensorRange>& ranges)
 {
-    Section section{.title = "Sensors", .icon = ICON_FA_TEMPERATURE_HALF, .rows = {}};
+    Section section{.title = std::string(SENSORS_SECTION_TITLE), .icon = ICON_FA_TEMPERATURE_HALF, .rows = {}};
     for (const Platform::SensorDevice& device : sensors.devices)
     {
         for (const Platform::SensorReading& reading : device.readings)
@@ -2445,7 +2446,8 @@ void redactUserPaths(std::span<Section> sections, const Platform::OsInfo& os)
 
 std::vector<Section> buildSystemInfoSections(const Domain::SystemInfoSnapshot& snapshot,
                                              const Core::GraphicsHostInfo& host,
-                                             const Platform::SystemInfoCapabilities& capabilities)
+                                             const Platform::SystemInfoCapabilities& capabilities,
+                                             const Domain::SensorPublication* sensors)
 {
     std::vector<Section> sections;
     if (snapshot.version == 0)
@@ -2476,9 +2478,17 @@ std::vector<Section> buildSystemInfoSections(const Domain::SystemInfoSnapshot& s
     {
         sections.push_back(buildSecuritySection(snapshot.security));
     }
-    if (snapshot.sensors.available)
+    // The sensor sampler's newest read once it has one (#2737), the page's own until then.
+    if (sensors != nullptr && sensors->version != 0)
     {
-        sections.push_back(buildSensorsSection(snapshot.sensors, snapshot.sensorRanges));
+        if (sensors->sensors.available)
+        {
+            sections.push_back(buildSensorsSection(sensors->sensors, sensors->ranges));
+        }
+    }
+    else if (snapshot.sensors.available)
+    {
+        sections.push_back(buildSensorsSection(snapshot.sensors, {}));
     }
     if (snapshot.graphics.available)
     {
