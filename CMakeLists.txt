@@ -211,6 +211,8 @@ set(TASKSMACK_SOURCES
     src/Domain/GPUModel.cpp
     src/Domain/StartupModel.cpp
     src/Domain/ServiceModel.cpp
+    src/Domain/SensorModel.cpp
+    src/Domain/SensorTracker.cpp
     src/Domain/SystemInfoModel.cpp
     src/Domain/CrashHistory.cpp
     src/Domain/ProcessIconCache.cpp
@@ -414,6 +416,8 @@ set(TASKSMACK_HEADERS
     src/Domain/GPUModel.h
     src/Domain/StartupModel.h
     src/Domain/ServiceModel.h
+    src/Domain/SensorModel.h
+    src/Domain/SensorTracker.h
     src/Domain/SystemInfoModel.h
     src/Domain/CrashHistory.h
     src/Domain/LruMap.h
