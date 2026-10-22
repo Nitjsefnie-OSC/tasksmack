@@ -7,7 +7,6 @@
 #include <grp.h>
 #include <linux/capability.h>
 #include <linux/prctl.h> // PR_* (sys/prctl.h includes it; named for include-cleaner)
-#include <pwd.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
 #include <sys/types.h>
@@ -103,21 +102,12 @@ struct CapabilitySets
 
 } // namespace
 
-Identity unprivilegedIdentity() noexcept
-{
-    passwd entry{};
-    passwd* found = nullptr;
-    std::array<char, 4096> buffer{};
-    if (::getpwnam_r("nobody", &entry, buffer.data(), buffer.size(), &found) == 0 && found != nullptr && found->pw_uid != 0 &&
-        found->pw_gid != 0)
-    {
-        return {.uid = found->pw_uid, .gid = found->pw_gid};
-    }
-    return FALLBACK_IDENTITY;
-}
-
 DropResult dropToKeptCapabilities(Identity runAs) noexcept
 {
+    if (runAs.uid == 0 || runAs.gid == 0)
+    {
+        return DropResult::Failed; // becoming root isn't stopping being root
+    }
     // First, so that even a failure below leaves nothing an exec could raise.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) - prctl(2) is variadic
     if (::prctl(PR_SET_NO_NEW_PRIVS, 1UL, 0UL, 0UL, 0UL) != 0)
@@ -129,7 +119,19 @@ DropResult dropToKeptCapabilities(Identity runAs) noexcept
     {
         return DropResult::Failed;
     }
-    if (current.permitted == 0 && current.effective == 0 && current.inheritable == 0)
+    // Root in any of its IDs (#2752): a saved UID 0 alone could be switched back to without a capability.
+    uid_t realUid = 0;
+    uid_t effectiveUid = 0;
+    uid_t savedUid = 0;
+    gid_t realGid = 0;
+    gid_t effectiveGid = 0;
+    gid_t savedGid = 0;
+    if (::getresuid(&realUid, &effectiveUid, &savedUid) != 0 || ::getresgid(&realGid, &effectiveGid, &savedGid) != 0)
+    {
+        return DropResult::Failed;
+    }
+    const bool root = realUid == 0 || effectiveUid == 0 || savedUid == 0 || realGid == 0 || effectiveGid == 0 || savedGid == 0;
+    if (!root && current.permitted == 0 && current.effective == 0 && current.inheritable == 0)
     {
         return DropResult::NotPrivileged;
     }
@@ -159,11 +161,8 @@ DropResult dropToKeptCapabilities(Identity runAs) noexcept
 
     // No longer root (#2752): never UID 0 or GID 0, and not dumpable, so no other process running as
     // runAs can ptrace it or read its memory.
-    if (runAs.uid == 0 || runAs.gid == 0)
-    {
-        return DropResult::Failed;
-    }
-    if (::geteuid() == 0 && !becomeIdentity(runAs))
+    // Root without CAP_SETUID and CAP_SETGID can't do this, and fails: never served as root.
+    if (root && !becomeIdentity(runAs))
     {
         return DropResult::Failed;
     }

@@ -885,6 +885,16 @@ TEST(TasksmackHelperTest, SetsNoNewPrivsBeforeServing)
     EXPECT_EQ(helper.exitCode(), 0);
 }
 
+// #2752: becoming root isn't stopping being root. Asked to run as UID or GID 0, the drop fails before it
+// changes anything -- this test process is left without no_new_privs.
+TEST(HelperPrivilegesTest, RefusesToRunAsRoot)
+{
+    const std::string noNewPrivsBefore = statusField(::getpid(), "NoNewPrivs");
+    EXPECT_EQ(HelperPrivileges::dropToKeptCapabilities({.uid = 0, .gid = 65534}), HelperPrivileges::DropResult::Failed);
+    EXPECT_EQ(HelperPrivileges::dropToKeptCapabilities({.uid = 65534, .gid = 0}), HelperPrivileges::DropResult::Failed);
+    EXPECT_EQ(statusField(::getpid(), "NoNewPrivs"), noNewPrivsBefore);
+}
+
 /// The user the root test's target runs as: neither root nor nobody, which the helper itself becomes
 /// (#2752), so only its capabilities let it act on the target. No passwd entry is needed to setuid().
 constexpr uid_t OTHER_USER = 61234;
@@ -924,9 +934,8 @@ TEST(TasksmackHelperRootTest, KeepsOnlyItsCapabilitiesAndServesEveryRequestOnAno
     EXPECT_EQ(statusField(helper.pid(), "NoNewPrivs"), "1");
 
     // Who it runs as (#2752): nobody, in every ID, with no supplementary groups.
-    const HelperPrivileges::Identity nobody = HelperPrivileges::unprivilegedIdentity();
-    const std::string uid = std::to_string(nobody.uid);
-    const std::string gid = std::to_string(nobody.gid);
+    const std::string uid = "65534"; // nobody and nogroup, written out rather than taken from the helper's constant
+    const std::string gid = "65534";
     EXPECT_EQ(statusField(helper.pid(), "Uid"), uid + '\t' + uid + '\t' + uid + '\t' + uid);
     EXPECT_EQ(statusField(helper.pid(), "Gid"), gid + '\t' + gid + '\t' + gid + '\t' + gid);
     EXPECT_EQ(statusField(helper.pid(), "Groups"), "");

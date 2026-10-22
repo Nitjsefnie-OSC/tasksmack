@@ -15,12 +15,14 @@
 // /etc/passwd, a unit file or anything in /etc/cron.d, which root may whatever its capabilities.
 // Everything else -- CAP_SYS_ADMIN, CAP_SYS_MODULE, CAP_SETUID, CAP_NET_ADMIN, CAP_DAC_OVERRIDE and the
 // rest -- leaves the bounding, permitted, effective, inheritable and ambient sets, the process is made
-// non-dumpable, and no_new_privs is set, so no exec can bring any of it back.
+// non-dumpable, and no_new_privs is set, so no exec can bring any of it back. nobody is shared: another
+// process running as nobody can signal or renice the helper, at worst ending TaskSmack's session (which
+// starts a new one on the next action), but can't ptrace it or read its memory, being neither able to
+// match its capabilities nor dump it.
 
 #include "Platform/Linux/ProcPrivileges.h"
 
 #include <cstdint>
-#include <optional>
 
 #include <sys/types.h>
 
@@ -47,16 +49,16 @@ struct Identity
     gid_t gid = 0;
 };
 
-/// The identity used when nobody can't be looked up: the conventional nobody/nogroup.
-inline constexpr Identity FALLBACK_IDENTITY{.uid = 65534, .gid = 65534};
+/// nobody and nogroup, by number: 65534 on every distribution TaskSmack ships for. Fixed rather than
+/// looked up, so no NSS module (sss, ldap, systemd-userdb) runs inside the still fully privileged helper,
+/// and no directory can map "nobody" to a real user. setresuid() needs no passwd entry.
+inline constexpr Identity NOBODY{.uid = 65534, .gid = 65534};
 
-/// nobody and its primary group, from the user database, or FALLBACK_IDENTITY. Call while still root and
-/// before dropToKeptCapabilities(): it may consult NSS (files, systemd-userdb, nscd).
-[[nodiscard]] Identity unprivilegedIdentity() noexcept;
-
-/// Drop to KEPT_CAPABILITIES and set no_new_privs (#2640); started as root, also become @p runAs, with
-/// no supplementary groups and not dumpable (#2752). Call once, before serving any request and before
-/// starting any thread (capabilities and IDs are per thread).
-[[nodiscard]] DropResult dropToKeptCapabilities(Identity runAs = FALLBACK_IDENTITY) noexcept;
+/// Drop to KEPT_CAPABILITIES and set no_new_privs (#2640); if any of its real, effective or saved user or
+/// group IDs is 0, also become @p runAs, with no supplementary groups and not dumpable (#2752) -- or fail,
+/// so the helper never serves as root, even started as root without the capabilities to stop being it.
+/// @p runAs must not be root's (UID or GID 0): that fails at once, before anything changes. Call once,
+/// before serving any request and before starting any thread (capabilities and IDs are per thread).
+[[nodiscard]] DropResult dropToKeptCapabilities(Identity runAs) noexcept;
 
 } // namespace Platform::HelperPrivileges
