@@ -95,7 +95,9 @@ int main(int argc, char** argv)
         return EXIT_UNTRUSTED_PEER;
     }
     // Before any request, reader or thread: keep only what the protocol needs of root (#2640).
-    if (Platform::HelperPrivileges::dropToKeptCapabilities() == Platform::HelperPrivileges::DropResult::Failed)
+    // Looked up while still root: the user database may need NSS (#2752).
+    const Platform::HelperPrivileges::Identity runAs = Platform::HelperPrivileges::unprivilegedIdentity();
+    if (Platform::HelperPrivileges::dropToKeptCapabilities(runAs) == Platform::HelperPrivileges::DropResult::Failed)
     {
         std::fputs("tasksmack-helper: couldn't drop the capabilities it doesn't need; not serving\n", stderr);
         return EXIT_FAILED;

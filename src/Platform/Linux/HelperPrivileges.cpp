@@ -4,10 +4,13 @@
 #include <cerrno>
 #include <cstdint>
 
+#include <grp.h>
 #include <linux/capability.h>
 #include <linux/prctl.h> // PR_* (sys/prctl.h includes it; named for include-cleaner)
+#include <pwd.h>
 #include <sys/prctl.h>
 #include <sys/syscall.h>
+#include <sys/types.h>
 #include <unistd.h>
 
 namespace Platform::HelperPrivileges
@@ -68,9 +71,52 @@ struct CapabilitySets
     return ::syscall(SYS_capset, &header, data.data()) == 0;
 }
 
+/// Become @p runAs, keeping the permitted capabilities: no supplementary groups, then the GID, then the
+/// UID with PR_SET_KEEPCAPS (setresuid() from UID 0 would otherwise clear the permitted set). Its effective
+/// set is cleared on the way; dropToKeptCapabilities() sets it again. Read back, every ID must be @p runAs.
+[[nodiscard]] bool becomeIdentity(Identity runAs) noexcept
+{
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) - prctl(2) is variadic
+    if (::setgroups(0, nullptr) != 0 || ::setresgid(runAs.gid, runAs.gid, runAs.gid) != 0 ||
+        ::prctl(PR_SET_KEEPCAPS, 1UL, 0UL, 0UL, 0UL) != 0 || ::setresuid(runAs.uid, runAs.uid, runAs.uid) != 0)
+    {
+        return false;
+    }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) - prctl(2) is variadic
+    if (::prctl(PR_SET_KEEPCAPS, 0UL, 0UL, 0UL, 0UL) != 0)
+    {
+        return false;
+    }
+    uid_t realUid = 0;
+    uid_t effectiveUid = 0;
+    uid_t savedUid = 0;
+    gid_t realGid = 0;
+    gid_t effectiveGid = 0;
+    gid_t savedGid = 0;
+    if (::getresuid(&realUid, &effectiveUid, &savedUid) != 0 || ::getresgid(&realGid, &effectiveGid, &savedGid) != 0)
+    {
+        return false;
+    }
+    return realUid == runAs.uid && effectiveUid == runAs.uid && savedUid == runAs.uid && realGid == runAs.gid &&
+           effectiveGid == runAs.gid && savedGid == runAs.gid && ::getgroups(0, nullptr) == 0;
+}
+
 } // namespace
 
-DropResult dropToKeptCapabilities() noexcept
+Identity unprivilegedIdentity() noexcept
+{
+    passwd entry{};
+    passwd* found = nullptr;
+    std::array<char, 4096> buffer{};
+    if (::getpwnam_r("nobody", &entry, buffer.data(), buffer.size(), &found) == 0 && found != nullptr && found->pw_uid != 0 &&
+        found->pw_gid != 0)
+    {
+        return {.uid = found->pw_uid, .gid = found->pw_gid};
+    }
+    return FALLBACK_IDENTITY;
+}
+
+DropResult dropToKeptCapabilities(Identity runAs) noexcept
 {
     // First, so that even a failure below leaves nothing an exec could raise.
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) - prctl(2) is variadic
@@ -107,6 +153,22 @@ DropResult dropToKeptCapabilities() noexcept
     // The ambient set (Linux 4.3+; EINVAL before it, when there's none to clear).
     // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) - prctl(2) is variadic
     if (::prctl(PR_CAP_AMBIENT, static_cast<unsigned long>(PR_CAP_AMBIENT_CLEAR_ALL), 0UL, 0UL, 0UL) != 0 && errno != EINVAL)
+    {
+        return DropResult::Failed;
+    }
+
+    // No longer root (#2752): never UID 0 or GID 0, and not dumpable, so no other process running as
+    // runAs can ptrace it or read its memory.
+    if (runAs.uid == 0 || runAs.gid == 0)
+    {
+        return DropResult::Failed;
+    }
+    if (::geteuid() == 0 && !becomeIdentity(runAs))
+    {
+        return DropResult::Failed;
+    }
+    // NOLINTNEXTLINE(cppcoreguidelines-pro-type-vararg) - prctl(2) is variadic
+    if (::prctl(PR_SET_DUMPABLE, 0UL, 0UL, 0UL, 0UL) != 0)
     {
         return DropResult::Failed;
     }
