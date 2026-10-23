@@ -30,6 +30,11 @@
 #include "Platform/Linux/LinuxProcessOpenFilesReader.h"
 #include "Platform/Linux/MemoryRollupRead.h"
 #include "Platform/Linux/SystemdJournal.h"
+#include "Platform/PlatformConfig.h"
+
+#if TASKSMACK_HAS_NETLINK_SOCKET_STATS
+#include "Platform/Linux/NetlinkSocketStats.h"
+#endif
 
 #include <charconv>
 #include <chrono>
@@ -37,6 +42,7 @@
 #include <cstdio>
 #include <cstdlib>
 #include <ctime>
+#include <memory>
 #include <optional>
 #include <stop_token>
 #include <string_view>
@@ -44,6 +50,18 @@
 
 #include <sys/types.h>
 #include <unistd.h>
+
+// A sanitizer build's LeakSanitizer stops the world at exit with clone and ptrace, which the seccomp
+// filter refuses (#2752), and then fails the exit: leaks are checked in the tests' own processes instead.
+#if defined(__has_feature)
+#if __has_feature(address_sanitizer) || __has_feature(leak_sanitizer)
+extern "C" const char* __lsan_default_options(); // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
+extern "C" const char* __lsan_default_options()  // NOLINT(bugprone-reserved-identifier,readability-identifier-naming)
+{
+    return "detect_leaks=0";
+}
+#endif
+#endif
 
 namespace
 {
@@ -111,7 +129,12 @@ int main(int argc, char** argv)
     // module ran as root.
     const std::optional<std::uint32_t> coredumpUid = Platform::SystemdJournal::lookUpCoredumpUid();
     Platform::HelperSandbox::preloadLibraries();
-    if (!Platform::HelperSandbox::installFilter(enforce ? Platform::HelperSandbox::Mode::Enforce : Platform::HelperSandbox::Mode::Log))
+    if (!Platform::HelperSandbox::supported() && !enforce)
+    {
+        // An architecture without a filter (not x86-64 or AArch64) keeps working in the log-only stage.
+        std::fputs("tasksmack-helper: no seccomp filter for this architecture; serving without one\n", stderr);
+    }
+    else if (!Platform::HelperSandbox::installFilter(enforce ? Platform::HelperSandbox::Mode::Enforce : Platform::HelperSandbox::Mode::Log))
     {
         std::fputs("tasksmack-helper: couldn't install its seccomp filter; not serving\n", stderr);
         return EXIT_FAILED;
@@ -123,7 +146,13 @@ int main(int argc, char** argv)
         Platform::LinuxProcessEnvironmentReader environment;
         Platform::LinuxProcessModulesReader modules;
         Platform::LinuxProcessOpenFilesReader openFiles;
+#if TASKSMACK_HAS_NETLINK_SOCKET_STATS
+        // Every table from /proc/<pid>/net, never a NETLINK_SOCK_DIAG socket: the seccomp filter allows
+        // the helper no socket but its broker's (#2752), and /proc gives the same tables.
+        Platform::LinuxProcessConnectionsReader connections(std::unique_ptr<Platform::INetlinkTransport>{});
+#else
         Platform::LinuxProcessConnectionsReader connections;
+#endif
         const Platform::BrokerServer::Readers readers{
             .environment = &environment,
             .modules = &modules,

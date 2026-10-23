@@ -21,11 +21,15 @@
 #include <linux/filter.h>
 #include <linux/seccomp.h>
 #include <sys/ioctl.h>
+#include <sys/ipc.h>
 #include <sys/mman.h>
 #include <sys/prctl.h>
 #include <sys/resource.h>
+#include <sys/shm.h>
 #include <sys/socket.h>
+#include <sys/stat.h>
 #include <sys/syscall.h>
+#include <sys/uio.h>
 #include <sys/wait.h>
 #include <unistd.h>
 
@@ -85,8 +89,8 @@ class HelperSandboxTest : public ::testing::Test
 
 TEST_F(HelperSandboxTest, TheProgramChecksTheArchitectureFirstAndEndsInItsModesDefault)
 {
-    const auto enforce = HelperSandbox::program(HelperSandbox::Mode::Enforce);
-    const auto log = HelperSandbox::program(HelperSandbox::Mode::Log);
+    const auto enforce = HelperSandbox::program(HelperSandbox::Mode::Enforce, ::getpid());
+    const auto log = HelperSandbox::program(HelperSandbox::Mode::Log, ::getpid());
     ASSERT_GT(enforce.size(), 3U);
     ASSERT_EQ(enforce.size(), log.size());
     EXPECT_EQ(enforce[0].code, BPF_LD | BPF_W | BPF_ABS);
@@ -141,8 +145,23 @@ TEST_F(HelperSandboxTest, FilesOpenReadOnly)
     EXPECT_EQ(
         underFilter(HelperSandbox::Mode::Enforce, [&path] { return errorOf(::open(path.c_str(), O_WRONLY | O_CREAT | O_CLOEXEC, 0600)); }),
         EACCES);
-    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::open("/proc/self/status", O_RDWR | O_CLOEXEC)); }), EACCES);
     EXPECT_NE(::access(path.c_str(), F_OK), 0); // nothing was created
+
+    // A file this user may write: each writing open is refused, and it's left as it was.
+    const int fd = ::open(path.c_str(), O_WRONLY | O_CREAT | O_EXCL | O_CLOEXEC, 0600);
+    ASSERT_GE(fd, 0);
+    ASSERT_EQ(::write(fd, "kept", 4), 4);
+    ::close(fd);
+    for (const int flags : {O_RDWR, O_WRONLY | O_TRUNC, O_WRONLY | O_APPEND})
+    {
+        EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [&path, flags] { return errorOf(::open(path.c_str(), flags | O_CLOEXEC)); }),
+                  EACCES)
+            << flags;
+    }
+    struct stat after{};
+    EXPECT_EQ(::stat(path.c_str(), &after), 0);
+    EXPECT_EQ(after.st_size, 4);
+    ::unlink(path.c_str());
     // openat2's flags are out of the filter's reach: it says the call doesn't exist.
     EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::syscall(SYS_openat2, AT_FDCWD, "/", nullptr, 0)); }), ENOSYS);
 }
@@ -169,7 +188,15 @@ TEST_F(HelperSandboxTest, NoCodeIsLoadedOrRun)
 TEST_F(HelperSandboxTest, ItsCapabilitiesEscapesAreRefused)
 {
     // Each would succeed (or fail otherwise) without the filter.
-    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::syscall(SYS_ptrace, 0 /* PTRACE_TRACEME */, 0, 0, 0)); }),
+    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce,
+                          []
+                          {
+                              int value = 1;
+                              int copy = 0;
+                              const iovec local{.iov_base = &copy, .iov_len = sizeof(copy)};
+                              const iovec remote{.iov_base = &value, .iov_len = sizeof(value)};
+                              return errorOf(::process_vm_readv(::getpid(), &local, 1, &remote, 1, 0)); // its own memory
+                          }),
               EPERM);
     EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce,
                           [] { return errorOf(::syscall(SYS_name_to_handle_at, AT_FDCWD, "/", nullptr, nullptr, 0)); }),
@@ -197,6 +224,39 @@ TEST_F(HelperSandboxTest, OnlyTheBrokerSocketCarriesMessages)
     // ioctl: only isatty()'s query.
     EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::ioctl(STDERR_FILENO, FIOCLEX)); }), ENOTTY);
 }
+
+TEST_F(HelperSandboxTest, NoExecutableMemoryByAnotherRoute)
+{
+    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce,
+                          []
+                          {
+                              void* const page = ::mmap(nullptr, 4096, PROT_READ | PROT_WRITE, MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
+                              return page == MAP_FAILED ? 100 : errorOf(::mprotect(page, 4096, PROT_READ | PROT_EXEC));
+                          }),
+              EPERM);
+    // READ_IMPLIES_EXEC would add PROT_EXEC to every readable mapping, past the mmap check.
+    EXPECT_EQ(
+        underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::syscall(SYS_personality, 0x0400000 /* READ_IMPLIES_EXEC */)); }),
+        EPERM);
+    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::shmget(IPC_PRIVATE, 4096, IPC_CREAT | 0600)); }), EPERM);
+}
+
+TEST_F(HelperSandboxTest, ItSignalsOnlyItselfByNumber)
+{
+    // Another process only through a pidfd; by number only itself (abort(), raise()).
+    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::kill(::getppid(), 0)); }), EPERM);
+    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::kill(::getpid(), 0)); }), 0);
+    EXPECT_EQ(underFilter(HelperSandbox::Mode::Enforce, [] { return errorOf(::syscall(SYS_tgkill, ::getpid(), ::gettid(), 0)); }), 0);
+}
+
+#if defined(__x86_64__)
+// The x32 ABI shares x86-64's audit architecture: its calls are told apart by a bit, and killed.
+TEST_F(HelperSandboxTest, AnX32CallIsKilled)
+{
+    constexpr long X32_SYSCALL_BIT = 0x40000000;
+    EXPECT_EQ(underFilter(HelperSandbox::Mode::Log, [] { return errorOf(::syscall(X32_SYSCALL_BIT | SYS_getpid)); }), -SIGSYS);
+}
+#endif
 
 TEST_F(HelperSandboxTest, AnUnlistedCallKillsUnderEnforceAndIsAllowedUnderLog)
 {

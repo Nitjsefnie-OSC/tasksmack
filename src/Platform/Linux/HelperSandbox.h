@@ -8,6 +8,10 @@
 // io_uring, keyrings and changing its IDs or capabilities. Its own job stays allowed: reading /proc, the
 // journal, coredumps and firmware files, pidfd_send_signal, setpriority, ioprio_set and sched_setaffinity.
 //
+// What it can't take away is the helper's job itself: with CAP_SYS_PTRACE a read-only open of
+// /proc/<pid>/mem still reads another process's memory, and the renice, I/O priority and affinity calls
+// stay open; the user-space checks guard those.
+//
 // A named refusal fails the call with an errno (so glibc falls back from openat2, and a late dlopen fails
 // cleanly); anything not listed is logged (Mode::Log) or kills the helper (Mode::Enforce). The program is
 // raw BPF over the build architecture's <sys/syscall.h> numbers, x86-64 or AArch64; any other
@@ -25,8 +29,9 @@ namespace Platform::HelperSandbox
 /// Whether this build has a filter for its architecture (x86-64 or AArch64).
 [[nodiscard]] bool supported() noexcept;
 
-/// The BPF program installFilter() loads, for @p mode; empty when !supported(). For tests and review.
-[[nodiscard]] std::vector<sock_filter> program(Mode mode);
+/// The BPF program installFilter() loads, for @p mode, for the process @p self (the only one it may
+/// signal by number); empty when !supported(). For tests and review.
+[[nodiscard]] std::vector<sock_filter> program(Mode mode, pid_t self);
 
 /// Loads what the helper needs after the filter goes in, while it can still load code: libsystemd's
 /// decompressors (zstd, xz, lz4), which it dlopen()s the first time a journal field needs one. A library

@@ -144,7 +144,9 @@ constexpr std::array ALLOWED{
     SYS_write,
     SYS_writev,
     SYS_close,
+#ifdef SYS_close_range
     SYS_close_range,
+#endif
     SYS_dup,
     SYS_dup3,
     SYS_fcntl,
@@ -194,7 +196,9 @@ constexpr std::array ALLOWED{
     SYS_readlinkat,
     SYS_getdents64,
     SYS_faccessat,
+#ifdef SYS_faccessat2
     SYS_faccessat2,
+#endif
     SYS_fadvise64,
     SYS_getcwd,
     // The serve loop
@@ -203,16 +207,19 @@ constexpr std::array ALLOWED{
     SYS_epoll_create1,
     SYS_epoll_ctl,
     SYS_epoll_pwait,
+#ifdef SYS_epoll_pwait2
     SYS_epoll_pwait2,
+#endif
     SYS_timerfd_create,
     SYS_timerfd_settime,
     SYS_timerfd_gettime,
-    // The helper's job (BrokerProtocol's actions), and abort()'s signal to itself
+// The helper's job (BrokerProtocol's actions); kill, tkill and tgkill only to itself (below)
+#ifdef SYS_pidfd_open
     SYS_pidfd_open,
+#endif
+#ifdef SYS_pidfd_send_signal
     SYS_pidfd_send_signal,
-    SYS_kill,
-    SYS_tgkill,
-    SYS_tkill,
+#endif
     SYS_setpriority,
     SYS_getpriority,
     SYS_ioprio_set,
@@ -246,14 +253,23 @@ constexpr std::array REFUSED{
     SYS_ptrace,
     SYS_process_vm_readv,
     SYS_process_vm_writev,
+#ifdef SYS_pidfd_getfd
     SYS_pidfd_getfd,
+#endif
     // New code or processes
     SYS_execve,
     SYS_execveat,
     SYS_clone,
+#ifdef SYS_clone3
     SYS_clone3,
+#endif
     SYS_memfd_create,
-    // Sockets: the broker's is inherited
+    // Sockets: the broker's is inherited. sendmsg and recvmsg aren't used (send and recv are sendto
+    // and recvfrom), and would carry fds (SCM_RIGHTS).
+    SYS_sendmsg,
+    SYS_recvmsg,
+    SYS_sendmmsg,
+    SYS_recvmmsg,
     SYS_socket,
     SYS_socketpair,
     SYS_connect,
@@ -282,6 +298,45 @@ constexpr std::array REFUSED{
     SYS_removexattr,
     SYS_lremovexattr,
     SYS_fremovexattr,
+#ifdef SYS_renameat
+    SYS_renameat, // AArch64 has it too
+#endif
+#ifdef SYS_fchmodat2
+    SYS_fchmodat2,
+#endif
+    // Code by another route than mmap: READ_IMPLIES_EXEC adds PROT_EXEC to every readable mapping, and
+    // SysV shared memory maps with SHM_EXEC. SysV and POSIX message queues are channels other users
+    // could open, past the openat check.
+    SYS_personality,
+    SYS_shmget,
+    SYS_shmat,
+    SYS_shmctl,
+    SYS_shmdt,
+    SYS_msgget,
+    SYS_msgsnd,
+    SYS_msgrcv,
+    SYS_msgctl,
+    SYS_semget,
+    SYS_semop,
+    SYS_semtimedop,
+    SYS_semctl,
+    SYS_mq_open,
+    SYS_mq_unlink,
+    SYS_mq_timedsend,
+    SYS_mq_timedreceive,
+    SYS_mq_notify,
+    SYS_mq_getsetattr,
+    // CAP_SYS_NICE beyond the helper's job (nice, I/O priority, affinity): real-time scheduling, which
+    // can starve every CPU, and other processes' memory placement
+    SYS_sched_setscheduler,
+    SYS_sched_setattr,
+    SYS_migrate_pages,
+    SYS_move_pages,
+    SYS_mbind,
+    SYS_set_mempolicy,
+#ifdef SYS_process_madvise
+    SYS_process_madvise,
+#endif
     // Mounts and namespaces
     SYS_mount,
     SYS_umount2,
@@ -289,12 +344,24 @@ constexpr std::array REFUSED{
     SYS_chroot,
     SYS_setns,
     SYS_unshare,
+#ifdef SYS_fsopen
     SYS_fsopen,
+#endif
+#ifdef SYS_fsmount
     SYS_fsmount,
+#endif
+#ifdef SYS_fspick
     SYS_fspick,
+#endif
+#ifdef SYS_move_mount
     SYS_move_mount,
+#endif
+#ifdef SYS_open_tree
     SYS_open_tree,
+#endif
+#ifdef SYS_mount_setattr
     SYS_mount_setattr,
+#endif
     // The kernel's larger attack surfaces
     SYS_bpf,
     SYS_perf_event_open,
@@ -329,7 +396,6 @@ constexpr std::array REFUSED{
     SYS_creat,
     SYS_unlink,
     SYS_rename,
-    SYS_renameat,
     SYS_mkdir,
     SYS_rmdir,
     SYS_link,
@@ -342,6 +408,9 @@ constexpr std::array REFUSED{
     SYS_iopl,
     SYS_ioperm,
     SYS_modify_ldt,
+    SYS_utime,
+    SYS_utimes,
+    SYS_futimesat,
 #endif
 };
 
@@ -358,7 +427,7 @@ bool supported() noexcept
 #endif
 }
 
-std::vector<sock_filter> program([[maybe_unused]] Mode mode)
+std::vector<sock_filter> program([[maybe_unused]] Mode mode, [[maybe_unused]] pid_t self)
 {
 #if defined(__x86_64__) || defined(__aarch64__)
     Program code;
@@ -387,7 +456,7 @@ std::vector<sock_filter> program([[maybe_unused]] Mode mode)
     code.blockFor(SYS_mprotect, withoutBits(2, PROT_EXEC, EPERM));
     code.blockFor(SYS_pkey_mprotect, withoutBits(2, PROT_EXEC, EPERM));
     // The broker socket only.
-    for (const long call : {SYS_sendto, SYS_recvfrom, SYS_sendmsg, SYS_recvmsg})
+    for (const long call : {SYS_sendto, SYS_recvfrom})
     {
         code.blockFor(call, onBrokerSocketOnly());
     }
@@ -408,8 +477,17 @@ std::vector<sock_filter> program([[maybe_unused]] Mode mode)
                    jump(BPF_JMP | BPF_JEQ | BPF_K, 0, 0, 1),
                    ret(ALLOW),
                    ret(fail(EPERM))});
+    // Signals by number only to itself (abort(), raise()): another process is signalled through a
+    // pidfd, which the user-space checks guard; kill(-1) with CAP_KILL would reach every process.
+    for (const long call : {SYS_kill, SYS_tkill, SYS_tgkill})
+    {
+        code.blockFor(
+            call, {load(argLow(0)), jump(BPF_JMP | BPF_JEQ | BPF_K, static_cast<std::uint32_t>(self), 0, 1), ret(ALLOW), ret(fail(EPERM))});
+    }
     // openat2's flags are in a struct the filter can't read: say it doesn't exist, and glibc uses openat.
+#ifdef SYS_openat2
     code.returnFor(SYS_openat2, fail(ENOSYS));
+#endif
     for (const long call : REFUSED)
     {
         code.returnFor(call, fail(EPERM));
@@ -434,13 +512,15 @@ bool installFilter(Mode mode) noexcept
 {
     try
     {
-        std::vector<sock_filter> code = program(mode);
+        std::vector<sock_filter> code = program(mode, ::getpid());
         if (code.empty() || code.size() > USHRT_MAX)
         {
             return false;
         }
         const sock_fprog fprog{.len = static_cast<unsigned short>(code.size()), .filter = code.data()};
-        return ::syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, 0, &fprog) == 0;
+        // FLAG_LOG: the named refusals (RET_ERRNO) are logged too, so the log-only stage sees a refusal
+        // the helper needed, not only the calls it doesn't list.
+        return ::syscall(SYS_seccomp, SECCOMP_SET_MODE_FILTER, SECCOMP_FILTER_FLAG_LOG, &fprog) == 0;
     }
     catch (...)
     {

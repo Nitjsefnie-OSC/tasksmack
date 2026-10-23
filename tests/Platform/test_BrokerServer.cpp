@@ -24,6 +24,7 @@
 
 #include <gtest/gtest.h>
 
+#include <algorithm>
 #include <array>
 #include <atomic>
 #include <cerrno>
@@ -46,8 +47,10 @@
 #include <variant>
 #include <vector>
 
+#include <arpa/inet.h>
 #include <fcntl.h>
 #include <grp.h>
+#include <netinet/in.h>
 #include <signal.h> // NOLINT(modernize-deprecated-headers) - POSIX signal.h provides kill(), csignal does not
 #include <spawn.h>
 #include <sys/socket.h>
@@ -1070,6 +1073,43 @@ TEST(PkexecBrokerTest, TheHelperListsAProcesssConnections)
     ASSERT_TRUE(response.has_value()) << response.error();
     ASSERT_TRUE(std::holds_alternative<Broker::ConnectionsReply>(*response));
     EXPECT_EQ(std::get<Broker::ConnectionsReply>(*response).result.status, ConnectionsReadStatus::Ok); // none open, but read
+}
+
+// #2752: a process with a socket open, read under the helper's enforcing filter, which allows it no
+// netlink socket: every table comes from /proc/<pid>/net, and the listener is there.
+TEST(PkexecBrokerTest, TheHelperListsAListeningSocketUnderItsFilter)
+{
+    const int listener = ::socket(AF_INET, SOCK_STREAM | SOCK_CLOEXEC, 0);
+    ASSERT_GE(listener, 0);
+    sockaddr_in address{};
+    address.sin_family = AF_INET;
+    address.sin_addr.s_addr = htonl(INADDR_LOOPBACK);
+    ASSERT_EQ(::bind(listener, reinterpret_cast<const sockaddr*>(&address), sizeof(address)),
+              0); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast) - sockets API
+    ASSERT_EQ(::listen(listener, 1), 0);
+    socklen_t length = sizeof(address);
+    ASSERT_EQ(::getsockname(listener, reinterpret_cast<sockaddr*>(&address), &length),
+              0); // NOLINT(cppcoreguidelines-pro-type-reinterpret-cast) - sockets API
+    const std::uint16_t port = ntohs(address.sin_port);
+
+    std::ifstream stat("/proc/self/stat");
+    const std::string line((std::istreambuf_iterator<char>(stat)), std::istreambuf_iterator<char>());
+    const ProcessTarget self{.pid = static_cast<std::int32_t>(::getpid()),
+                             .startTimeTicks = ProcParsing::parseStatStartTime(line).value_or(0)};
+
+    PkexecBroker broker(TASKSMACK_HELPER_PATH, {}, HelperSandbox::Mode::Enforce);
+    ASSERT_TRUE(broker.connect(std::stop_token{}).has_value());
+    const auto response = broker.call(Broker::ConnectionsRequest{.target = self}, std::stop_token{});
+    ::close(listener);
+    ASSERT_TRUE(response.has_value()) << response.error();
+    ASSERT_TRUE(std::holds_alternative<Broker::ConnectionsReply>(*response));
+    const ConnectionsReadResult& result = std::get<Broker::ConnectionsReply>(*response).result;
+    ASSERT_EQ(result.status, ConnectionsReadStatus::Ok) << result.detail;
+    EXPECT_TRUE(std::ranges::any_of(result.connections,
+                                    [port](const ProcessConnection& connection)
+                                    { return connection.state == ConnectionState::Listen && connection.local.port == port; }))
+        << "port " << port;
+    EXPECT_TRUE(broker.connected()) << "the read didn't kill the helper";
 }
 
 TEST(PkexecBrokerTest, TheHelperReadsAProcesssPssAndUss)
