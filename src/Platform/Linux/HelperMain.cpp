@@ -11,7 +11,7 @@
 // single request it checks that the socket's peer is the process that started it (pkexec execs this in
 // its own place, so that is TaskSmack), and the user pkexec authenticated (PKEXEC_UID) or, run directly
 // as the tests do, its own. Then it drops every root capability its requests don't need and sets
-// no_new_privs (HelperPrivileges.h, #2640).
+// no_new_privs (HelperPrivileges.h, #2640), and installs a seccomp allow-list (HelperSandbox.h, #2752).
 
 #include "Platform/BrokerProtocol.h"
 #include "Platform/BrokerRequestMapping.h"
@@ -20,6 +20,8 @@
 #include "Platform/Linux/BrokerSocket.h"
 #include "Platform/Linux/FirmwareFileRead.h"
 #include "Platform/Linux/HelperPrivileges.h"
+#include "Platform/Linux/HelperSandbox.h"
+#include "Platform/Linux/HelperSandboxMode.h"
 #include "Platform/Linux/LinuxCoredumps.h"
 #include "Platform/Linux/LinuxProcessConnectionsReader.h"
 #include "Platform/Linux/LinuxProcessControl.h"
@@ -81,9 +83,12 @@ constexpr int EXIT_UNTRUSTED_PEER = 3;
 
 int main(int argc, char** argv)
 {
-    if (argc != 2 || std::string_view(argv[1]) != "--broker") // NOLINT(cppcoreguidelines-pro-bounds-pointer-arithmetic) - argv
+    // NOLINTBEGIN(cppcoreguidelines-pro-bounds-pointer-arithmetic) - argv
+    const bool enforce = argc == 3 && std::string_view(argv[2]) == Platform::HelperSandbox::ENFORCE_ARGUMENT;
+    if ((argc != 2 && !enforce) || std::string_view(argv[1]) != "--broker")
+    // NOLINTEND(cppcoreguidelines-pro-bounds-pointer-arithmetic)
     {
-        std::fputs("tasksmack-helper: started by TaskSmack only (--broker, with its socket as stdin)\n", stderr);
+        std::fputs("tasksmack-helper: started by TaskSmack only (--broker [--seccomp=enforce], with its socket as stdin)\n", stderr);
         return EXIT_USAGE;
     }
     namespace Socket = Platform::BrokerSocket;
@@ -100,6 +105,15 @@ int main(int argc, char** argv)
         Platform::HelperPrivileges::DropResult::Failed)
     {
         std::fputs("tasksmack-helper: couldn't drop the capabilities it doesn't need; not serving\n", stderr);
+        return EXIT_FAILED;
+    }
+    // What needs NSS or loading code, done before the filter shuts both out (#2752): as nobody, so no NSS
+    // module ran as root.
+    const std::optional<std::uint32_t> coredumpUid = Platform::SystemdJournal::lookUpCoredumpUid();
+    Platform::HelperSandbox::preloadLibraries();
+    if (!Platform::HelperSandbox::installFilter(enforce ? Platform::HelperSandbox::Mode::Enforce : Platform::HelperSandbox::Mode::Log))
+    {
+        std::fputs("tasksmack-helper: couldn't install its seccomp filter; not serving\n", stderr);
         return EXIT_FAILED;
     }
     try
@@ -121,12 +135,14 @@ int main(int argc, char** argv)
             .firmwareFile = [](Platform::Broker::FirmwareFile file) { return Platform::Linux::readFirmwareFileAt("/", file); },
             // Every user's crashes: the journal and core files as root (#2310)
             .crashes =
-                []
+                [coredumpUid]
             {
                 Platform::CrashesInfo info;
                 const std::time_t now = std::time(nullptr);
-                Platform::LinuxCoredumps::readCrashFacts(
-                    "/", now > 0 ? static_cast<std::uint64_t>(now) : 0, info, Platform::SystemdJournal::makeCoredumpJournalReader());
+                Platform::LinuxCoredumps::readCrashFacts("/",
+                                                         now > 0 ? static_cast<std::uint64_t>(now) : 0,
+                                                         info,
+                                                         Platform::SystemdJournal::makeCoredumpJournalReader(coredumpUid));
                 return info;
             },
         };
