@@ -49,8 +49,13 @@ void textView(std::string_view text)
     ImGui::TextUnformatted(text.data(), text.data() + text.size());
 }
 
-/// For the charts before the sensor sampler's first read.
-const std::map<std::string, Domain::SensorHistory> NO_SENSOR_HISTORIES;
+/// For the charts before the sensor sampler's first read. A function-local static: a namespace-scope map's
+/// constructor may throw (MSVC's does) before main().
+[[nodiscard]] const std::map<std::string, Domain::SensorHistory>& noSensorHistories()
+{
+    static const std::map<std::string, Domain::SensorHistory> NONE;
+    return NONE;
+}
 
 /// Rebuilds the sections when a new page read or sensor read (#2737) is published, and the visible rows
 /// when they, the filter or the identifier toggle changed: never every frame (#580).
@@ -444,7 +449,7 @@ SystemInfoViewResult renderSystemInfoView(const Domain::SystemInfoSnapshot* snap
         for (const auto& visible : state.visible)
         {
             const SystemInfo::RowAction clicked =
-                renderSection(visible, labelWidth, sensors != nullptr ? sensors->histories : NO_SENSOR_HISTORIES, reading, state, scheme);
+                renderSection(visible, labelWidth, sensors != nullptr ? sensors->histories : noSensorHistories(), reading, state, scheme);
             wifiDetails = wifiDetails || clicked == SystemInfo::RowAction::ShowWifiDetails;
             publicIp = publicIp || clicked == SystemInfo::RowAction::ShowPublicIp;
             authenticate = authenticate || clicked == SystemInfo::RowAction::AuthenticateToRead;
