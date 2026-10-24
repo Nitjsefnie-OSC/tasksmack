@@ -369,7 +369,6 @@ set(COMMON_TEST_SOURCES
     UI/test_TabularDigits.cpp
     App/test_ProcessColumnConfig.cpp
     App/test_ProcessSortUtils.cpp
-    App/test_AdaptiveIntervalUtils.cpp
     App/test_ProcessTreeFlatten.cpp
     App/test_ProcessTreeIndent.cpp
     App/test_ProcessTableFlags.cpp

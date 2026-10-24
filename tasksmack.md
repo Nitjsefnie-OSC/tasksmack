@@ -110,9 +110,11 @@ Sampling is deliberately mixed according to workload:
 5. System, Storage, and GPU models atomically publish immutable versioned snapshot-and-history generations; ProcessModel publishes a monotonic snapshot version.
    - GPU data has one owner, the GPU model on the system sampler (#1417): each refresh reads the system and the per-process GPU counters together and publishes the per-process ones, stamped with the refresh time. `ProcessModel` merges the newest of those publications and never calls the GPU probe, so a slow driver read can't delay the process list. The two samplers keep their own cadences: one publication can be merged into several process generations, its per-process utilization being a rate over one GPU interval; one older than `PROCESS_GPU_DATA_MAX_AGE_MS` (the GPU sampler has stalled) is shown as a failed read; a process first listed after the read shows as not read yet, even if the read has an entry for its PID (that entry belongs to an exited process that held the PID).
 6. Panels retain those generations and rebuild process filter/sort caches only when versions change, avoiding render-frame locks and deep copies.
-7. Process Details records history once per ProcessModel publication rather than once per UI timer tick, so adaptive sampling cannot duplicate stale values. `ProcessModel::watchProcess()` keeps a shared sample of the selected process from every publication (the last 64), each stamped with the time the generation was sampled; the details pane takes in every sample newer than its last, so generations published between two frames are not lost and its charts share the Overview's timebase. A frame with nothing new costs one atomic load and copies no snapshot.
+7. Process Details records history once per ProcessModel publication rather than once per UI timer tick, so the frame rate can neither duplicate a stale value nor drop one. `ProcessModel::watchProcess()` keeps a shared sample of the selected process from every publication (the last 64), each stamped with the time the generation was sampled; the details pane takes in every sample newer than its last, so generations published between two frames are not lost and its charts share the Overview's timebase. A frame with nothing new costs one atomic load and copies no snapshot.
 
 The default interval is 1 second and can be configured from 100 ms to 5 seconds. History defaults to 5 minutes and is bounded from 10 seconds to 30 minutes. Shared defaults and clamps live in `src/Domain/SamplingConfig.h`.
+
+Sampling and drawing are separate (#2731): every sampler runs at the refresh interval set in Settings, in every UI state. A hidden tab, a resize or move, a minimized window and the frame rate change what is drawn and how often, never how often the data is sampled. `ProcessesPanel::samplingInterval()` and `SystemMetricsPanel::samplingInterval()` expose the sampler's interval, and the panel tests check it equals the setting through every state.
 
 ### History Storage
 
@@ -229,7 +231,7 @@ Only Linux and Windows are implemented. Windows builds target Windows 10 version
 
 `Core::Application` drains SDL3 events, updates layers, renders one frame, and presents it. Panels react to application events and ImGui input rather than polling SDL directly. Resize handling batches queued events before rendering and updates the viewport from framebuffer-size events.
 
-The application throttles idle and minimized rendering. Domain and Platform code remain graphics-agnostic.
+The application throttles idle and minimized rendering; it never throttles sampling, which keeps the Settings interval (#2731). Domain and Platform code remain graphics-agnostic.
 
 Custom title-bar behavior is intentionally platform-specific:
 
