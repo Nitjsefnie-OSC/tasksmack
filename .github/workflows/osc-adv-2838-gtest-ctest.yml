@@ -38,6 +38,7 @@ jobs:
           fetch-depth: 1
 
       - name: Provenance
+        shell: bash
         run: |
           set -euo pipefail
           echo "tested_target_ref=${{ inputs.target_ref }}"
@@ -136,6 +137,7 @@ jobs:
           fetch-depth: 1
 
       - name: Provenance
+        shell: bash
         run: |
           set -euo pipefail
           echo "tested_target_ref=${{ inputs.target_ref }}"
