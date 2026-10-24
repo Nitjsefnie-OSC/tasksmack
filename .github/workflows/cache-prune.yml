@@ -25,6 +25,7 @@ on:
       - Static Analysis
       - Manual Build
       - Release
+      - OSC adv probe - 2838 gtest discovery Build & Test
     types: [completed]
     branches: [main]
   workflow_dispatch:

@@ -1,0 +1,231 @@
+# osc-adv-2838-gtest-ctest.yml — one-shot CI probe (Nitjsefnie-OSC fork only).
+# Claim: the Build & Test legs (ubuntu-24.04 debug, windows-2025 debug) pass on the
+# exact target_ref commit. Steps copied verbatim from the repository's own
+# reusable-build-test.yml build-test job with three sanctioned adaptations:
+#   (1) actions/checkout pinned to ${{ inputs.target_ref }} plus a Provenance step
+#       echoing the checked-out SHA (same canonical step as osc-manual.yml);
+#   (2) workflow_call inputs replaced by literals (os, build_type=debug, build=true);
+#   (3) the clang_tidy and build_benchmarks legs are dropped (ci.yml runs them on
+#       PRs; this probe claims the Build & Test legs only);
+#   (4) no cache legs: the repo's check-cache-prune-triggers gate counts ccache-action
+#       as cache-saving and this one-shot probe is not in cache-prune.yml's list, so
+#       ccache is off and the build runs cold (timeout 60).
+# Local ./.github/actions/* references resolve from the CHECKED-OUT TREE at
+# target_ref, so the build recipe is the target commit's own recipe.
+name: OSC adv probe - 2838 gtest discovery Build & Test
+
+on:
+  workflow_dispatch:
+    inputs:
+      target_ref:
+        description: 'Git branch, tag, or 40-character commit SHA to validate'
+        required: true
+
+permissions: {}
+
+jobs:
+  build-test-linux:
+    name: Build & Test (ubuntu-24.04 debug)
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+
+      - name: Provenance
+        run: |
+          set -euo pipefail
+          echo "tested_target_ref=${{ inputs.target_ref }}"
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ ! "$checked_out_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::git rev-parse HEAD did not produce a 40-character commit SHA: $checked_out_sha"
+            exit 1
+          fi
+          printf 'checked-out SHA: %s\n' "$checked_out_sha"
+
+      - name: Setup Python for GLAD
+        uses: ./.github/actions/setup-python-glad
+
+      - name: Setup LLVM
+        if: runner.os == 'Linux'
+        uses: ./.github/actions/setup-llvm
+        with:
+          llvm-version: '22'
+          install-clang-tidy: 'false'
+          generate-test-locales: 'true'
+
+      - name: Restore FetchContent dependencies
+        id: fetchcontent
+        uses: ./.github/actions/fetchcontent-cache
+        with:
+          mode: restore
+
+      - name: Configure (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --preset debug -DPython3_EXECUTABLE="$(which python)" -DTASKSMACK_ENABLE_PCH=OFF -DTASKSMACK_ENABLE_CCACHE=OFF
+
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: cmake --build --preset debug
+
+      - name: Build profile
+        if: always()
+        shell: bash
+        env:
+          BUILD_DIR: build/debug
+        run: python -I -X utf8 tools/ninja-build-profile.py "$BUILD_DIR" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Install virtual display (Linux)
+        if: runner.os == 'Linux'
+        run: sudo timeout --kill-after=10s 300s apt-get install -y --no-install-recommends xvfb xauth libgl1-mesa-dri libglx-mesa0 libegl1 libegl-mesa0
+
+      - name: Test (Linux)
+        if: runner.os == 'Linux'
+        env:
+          TASKSMACK_REQUIRE_DISPLAY: '1'
+          TASKSMACK_REQUIRE_SDBUS: '1'
+        run: xvfb-run -a -s "-screen 0 1920x1080x24 -noreset" ctest --preset debug -j "$(nproc)" --schedule-random --output-on-failure --timeout 60 --output-junit test-results.xml
+
+      - name: Merge test results
+        if: always()
+        shell: bash
+        env:
+          BUILD_DIR: build/debug
+        run: python tools/merge-gtest-results.py "$BUILD_DIR/test-results.xml" "$BUILD_DIR/gtest-results" "$BUILD_DIR/test-results-cases.xml"
+
+      - name: Upload test results (Linux)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: linux-debug-test-results
+          path: |
+            build/debug/test-results.xml
+            build/debug/test-results-cases.xml
+          retention-days: 5
+
+      - name: Publish test results to Job Summary
+        if: >-
+          always() &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        uses: dorny/test-reporter@d1b5dff021aa968b288b02285a8bf47471c5928a # v3.2.0
+        with:
+          name: Test Results (ubuntu-24.04 debug)
+          path: |
+            build/debug/test-results-cases.xml
+          reporter: java-junit
+          fail-on-error: false
+          fail-on-empty: false
+
+  build-test-windows:
+    name: Build & Test (windows-2025 debug)
+    runs-on: windows-2025
+    timeout-minutes: 60
+    permissions:
+      contents: read
+      checks: write
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ inputs.target_ref }}
+          fetch-depth: 1
+
+      - name: Provenance
+        run: |
+          set -euo pipefail
+          echo "tested_target_ref=${{ inputs.target_ref }}"
+          checked_out_sha="$(git rev-parse HEAD)"
+          if [[ ! "$checked_out_sha" =~ ^[0-9a-f]{40}$ ]]; then
+            echo "::error::git rev-parse HEAD did not produce a 40-character commit SHA: $checked_out_sha"
+            exit 1
+          fi
+          printf 'checked-out SHA: %s\n' "$checked_out_sha"
+
+      - name: Setup Python for GLAD
+        uses: ./.github/actions/setup-python-glad
+
+      - name: Setup Windows LLVM
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-windows-llvm
+        with:
+          llvm-version: '22.1.8'
+
+      - name: Restore configure-check results (Windows)
+        id: cmake-checks
+        uses: ./.github/actions/cmake-check-cache
+        with:
+          mode: restore
+          preset: win-debug
+          toolchain: llvm-22.1.8
+
+      - name: Configure (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          LLVM_ROOT: C:\Program Files\LLVM
+          WIN_DEBUG_CI_ARGS: '-DTASKSMACK_ENABLE_IPO=OFF -DTASKSMACK_ENABLE_GHASH=ON -DCMAKE_CXX_SCAN_FOR_MODULES=OFF'
+        run: cmake --preset win-debug -DPython3_EXECUTABLE="$env:pythonLocation\python.exe" -DTASKSMACK_ENABLE_PCH=OFF -DTASKSMACK_ENABLE_CCACHE=OFF ${{ env.WIN_DEBUG_CI_ARGS }} ${{ steps.cmake-checks.outputs.cmake-args }}
+
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          LLVM_ROOT: C:\Program Files\LLVM
+        run: cmake --build --preset win-debug
+
+      - name: Software OpenGL for the display tests (Windows)
+        if: runner.os == 'Windows'
+        uses: ./.github/actions/setup-mesa-llvmpipe
+        with:
+          copy-to: build/win-debug/tests
+
+      - name: Build profile
+        if: always()
+        shell: bash
+        env:
+          BUILD_DIR: build/win-debug
+        run: python -I -X utf8 tools/ninja-build-profile.py "$BUILD_DIR" | tee -a "$GITHUB_STEP_SUMMARY"
+
+      - name: Test (Windows)
+        if: runner.os == 'Windows'
+        shell: pwsh
+        env:
+          TASKSMACK_REQUIRE_DISPLAY: '1'
+          GALLIUM_DRIVER: llvmpipe
+        run: ctest --preset win-debug -j $env:NUMBER_OF_PROCESSORS --schedule-random --output-on-failure --timeout 60 --output-junit test-results.xml
+
+      - name: Merge test results
+        if: always()
+        shell: bash
+        env:
+          BUILD_DIR: build/win-debug
+        run: python tools/merge-gtest-results.py "$BUILD_DIR/test-results.xml" "$BUILD_DIR/gtest-results" "$BUILD_DIR/test-results-cases.xml"
+
+      - name: Upload test results (Windows)
+        if: always()
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7
+        with:
+          name: windows-debug-test-results
+          path: |
+            build/win-debug/test-results.xml
+            build/win-debug/test-results-cases.xml
+          retention-days: 5
+
+      - name: Publish test results to Job Summary
+        if: >-
+          always() &&
+          (github.event_name != 'pull_request' ||
+           github.event.pull_request.head.repo.full_name == github.repository)
+        uses: dorny/test-reporter@d1b5dff021aa968b288b02285a8bf47471c5928a # v3.2.0
+        with:
+          name: Test Results (windows-2025 debug)
+          path: |
+            build/win-debug/test-results-cases.xml
+          reporter: java-junit
+          fail-on-error: false
+          fail-on-empty: false
