@@ -9,6 +9,7 @@
 
 #include "Platform/AsciiTrim.h"
 
+#include <algorithm>
 #include <cstddef>
 #include <filesystem>
 #include <optional>
@@ -165,14 +166,7 @@ struct Entry
 {
     const auto listed = [](const std::vector<std::string>& list, const std::string& desktop)
     {
-        for (const std::string& name : list)
-        {
-            if (name == desktop)
-            {
-                return true;
-            }
-        }
-        return false;
+        return std::ranges::find(list, desktop) != list.end();
     };
     for (const std::string& desktop : splitList(currentDesktops, ':'))
     {
