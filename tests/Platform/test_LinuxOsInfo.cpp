@@ -1314,6 +1314,60 @@ TEST(LinuxNetworkAdaptersTest, ReadsTheFactsUnderARoot)
     EXPECT_EQ(info.searchDomains, (std::vector<std::string>{"lan"}));
 }
 
+// #2591: each adapter's own gateways (IPv4 then IPv6, by metric), its hardware from udev's hwdata names,
+// and whether DHCP configures it.
+TEST(LinuxNetworkAdaptersTest, ReadsEachAdaptersGatewaysHardwareAndDhcp)
+{
+    const FixtureRoot root;
+    root.write("sys/class/net/eth0/ifindex", "2\n");
+    root.write("sys/class/net/wlan0/ifindex", "3\n");
+    root.write("sys/class/net/usb0/ifindex", "4\n");
+    root.write("run/udev/data/n2",
+               "I:12\nE:ID_VENDOR_FROM_DATABASE=Intel Corporation\nE:ID_MODEL_FROM_DATABASE=Ethernet Connection I219-V\n");
+    root.write("run/udev/data/n3",
+               "E:ID_VENDOR_FROM_DATABASE=Intel Corporation\nE:ID_MODEL_FROM_DATABASE=Intel Corporation Wi-Fi 6 AX201\n");
+    root.write("proc/net/route",
+               "Iface\tDestination\tGateway\tFlags\tRefCnt\tUse\tMetric\tMask\n"
+               "wlan0\t00000000\t0101A8C0\t0003\t0\t0\t600\t00000000\n"
+               "eth0\t00000000\t0100A8C0\t0003\t0\t0\t100\t00000000\n"
+               "eth0\t00000000\t0200A8C0\t0003\t0\t0\t50\t00000000\n"
+               "eth0\t0000A8C0\t00000000\t0001\t0\t0\t100\t00FFFFFF\n");
+    root.write("proc/net/ipv6_route",
+               "00000000000000000000000000000000 00 00000000000000000000000000000000 00 fe800000000000000000000000000001 00000400 00000001 "
+               "00000000 00000003 eth0\n");
+    const auto addresses = []
+    {
+        return std::vector<LinuxNetworkAdapters::ListedAddress>{
+            {.adapter = "eth0", .address = {.address = "192.168.0.20", .prefix = 24, .v6 = false}},
+            {.adapter = "usb0", .address = {.address = "fe80::1", .prefix = 64, .v6 = true}},
+        };
+    };
+    const LinuxNetworkAdapters::DhcpLeaseReader networkManager = [](const std::string& adapter)
+    {
+        LinuxNetworkAdapters::DhcpLeaseRead read;
+        read.dhcp = adapter == "wlan0"; // eth0 static; usb0 not up (no IPv4 address), so not "static"
+        return read;
+    };
+    NetworkAdaptersInfo info;
+    LinuxNetworkAdapters::readNetworkAdapterFacts(
+        root.path(), info, addresses, {.wifiLink = {}, .linkDns = {}, .dhcpLease = networkManager, .networkdLease = {}});
+    ASSERT_EQ(info.adapters.size(), 3U);
+    const NetworkAdapter& eth0 = info.adapters[0];
+    EXPECT_EQ(eth0.gateways, (std::vector<std::string>{"192.168.0.2", "192.168.0.1", "fe80::1"}));
+    EXPECT_EQ(eth0.description, "Intel Corporation Ethernet Connection I219-V");
+    EXPECT_EQ(eth0.dhcpEnabled, false);
+    const NetworkAdapter& usb0 = info.adapters[1];
+    EXPECT_TRUE(usb0.gateways.empty());
+    EXPECT_TRUE(usb0.description.empty()) << "no udev entry";
+    EXPECT_FALSE(usb0.dhcpEnabled.has_value());
+    const NetworkAdapter& wlan0 = info.adapters[2];
+    EXPECT_EQ(wlan0.gateways, (std::vector<std::string>{"192.168.1.1"}));
+    EXPECT_EQ(wlan0.description, "Intel Corporation Wi-Fi 6 AX201") << "the model already names the vendor";
+    EXPECT_EQ(wlan0.dhcpEnabled, true);
+    EXPECT_EQ(info.gatewayV4, "192.168.0.2"); // the lowest metric overall
+    EXPECT_EQ(info.gatewayV4Adapter, "eth0");
+}
+
 TEST(LinuxNetworkAdaptersTest, AsksTheWifiReaderOnlyForWirelessAdapters)
 {
     const FixtureRoot root;
