@@ -240,8 +240,8 @@ adapterGateways(std::string_view adapter, std::vector<DefaultRoute> v4, std::vec
 /// alone when it already starts with the vendor or the vendor is unknown. Empty when udev named neither.
 [[nodiscard]] inline std::string adapterDescription(std::string_view udevText)
 {
-    const std::string vendor = LinuxStorage::udevProperty(udevText, "ID_VENDOR_FROM_DATABASE");
-    const std::string model = LinuxStorage::udevProperty(udevText, "ID_MODEL_FROM_DATABASE");
+    std::string vendor = LinuxStorage::udevProperty(udevText, "ID_VENDOR_FROM_DATABASE");
+    std::string model = LinuxStorage::udevProperty(udevText, "ID_MODEL_FROM_DATABASE");
     if (model.empty())
     {
         return vendor;
