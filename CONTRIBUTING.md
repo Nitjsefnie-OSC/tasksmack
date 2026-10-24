@@ -139,7 +139,7 @@ Sandbox options.
 - ccache 4.9.1+ (recommended for faster rebuilds)
 - llvm-profdata and llvm-cov (coverage)
 - Python 3.14+ with jinja2 (required for GLAD OpenGL loader generation)
-- FreeType: nothing to install; the build always fetches and builds it (2.14.3, pinned in `cmake/Dependencies.cmake`) and links it statically
+- FreeType: nothing to install; the build always fetches and builds the version pinned in `cmake/Dependencies.cmake` and links it statically
 - **Optional GPU monitoring libraries:**
   - NVIDIA drivers with NVML (libnvidia-ml.so) for NVIDIA GPU support
   - ROCm SMI library (librocm_smi64.so) for AMD GPU support
@@ -182,7 +182,7 @@ sudo apt install libsystemd-dev pkg-config
 - ccache 4.9.1+ (optional, for faster rebuilds; `setup-dev.ps1 -DevTools`)
 - Python 3.14+ with jinja2 (required for GLAD OpenGL loader generation)
 - git (CMake requires it, and fetches the dependencies with it)
-- FreeType: nothing to install; the build always fetches and builds it (2.14.3, pinned in `cmake/Dependencies.cmake`) and links it statically
+- FreeType: nothing to install; the build always fetches and builds the version pinned in `cmake/Dependencies.cmake` and links it statically
 - **MSVC C++ libraries and the Windows SDK**: required. Clang targets the MSVC ABI, so it compiles and links against the MSVC standard library and CRT and the Windows SDK. It finds the MSVC libraries through the Visual Studio installation and the SDK through the Windows Kits registry key. Nothing else from Visual Studio is used: not MSBuild, its CMake or Ninja, `rc.exe` or `cl.exe`, and no SDK tool. `tools/setup-dev.ps1` installs Visual Studio 2022 Build Tools with only `Microsoft.VisualStudio.Component.VC.Tools.x86.x64` (plus `...VC.Tools.ARM64` on Windows on Arm). It installs the Windows SDK 10.0.26100 separately (winget `Microsoft.WindowsSDK.10.0.26100`) with only its desktop C++ feature for your architecture (`OptionId.DesktopCPPx64`, or `OptionId.DesktopCPParm64` on Arm), and skips it when `Windows Kits\10\Include\10.0.26100.0` and the matching `Lib` folders are already there. A Visual Studio you already have works too if it has `VC.Tools.x86.x64` and a Windows 11 SDK 10.0.26100 (its `Windows11SDK.26100` component, or the standalone SDK). See below for how the RC (resource) compiler is selected.
 
 **RC (resource) compiler**: the build compiles `assets/tasksmack.rc.in` (icon and version info) into
@@ -2621,8 +2621,12 @@ opens PRs; the same CI gate applies before merge.
     `tools/setup-dev.sh`. Update by hand in the same PR: the "3.14" in this guide's setup commands and in
     `requirements.txt`'s header.
   - **CMake, Ninja and ccache** pins in `tools/setup-dev.ps1` (`$CMakeVersion`, `$NinjaVersion`,
-    `$CcacheVersion`). CMake and Ninja match the `windows-2025` runner image. WinGet's feed lags upstream
-    and no CI job runs this script, so confirm WinGet has the version before approving.
+    `$CcacheVersion`). Ninja matches the `windows-2025` runner image; CMake is the newest version WinGet
+    carries, since its catalog dropped every 3.x, the image's 3.31.x included (#2844). WinGet's feed lags
+    upstream, keeps only recent versions, and no CI job installs with this script, so confirm WinGet has
+    the version before approving. A pin WinGet no longer carries doesn't stop the script: it installs
+    WinGet's newest version with a warning that names the pin to move, so a stale pin shows up on a
+    clean machine as that warning, not as a failed setup.
 - *Tier 3, manual:* tools that ride the OS, runner or SDK rather than their own releases (`wpr`, `xperf`,
   `wpa`, CPack's NSIS/dpkg/rpmbuild, `gh`, `xvfb`), and optional local-only tools (Inkscape, heaptrack,
   FlameGraph, hotspot).
