@@ -965,6 +965,13 @@ TEST(TasksmackHelperRootTest, KeepsOnlyItsCapabilitiesAndServesEveryRequestOnAno
     EXPECT_EQ(statusField(helper.pid(), "Gid"), gid + '\t' + gid + '\t' + gid + '\t' + gid);
     EXPECT_EQ(statusField(helper.pid(), "Groups"), "");
 
+    // Who it runs as (#2752): nobody, in every ID, with no supplementary groups.
+    const std::string uid = "65534"; // nobody and nogroup, written out rather than taken from the helper's constant
+    const std::string gid = "65534";
+    EXPECT_EQ(statusField(helper.pid(), "Uid"), uid + '\t' + uid + '\t' + uid + '\t' + uid);
+    EXPECT_EQ(statusField(helper.pid(), "Gid"), gid + '\t' + gid + '\t' + gid + '\t' + gid);
+    EXPECT_EQ(statusField(helper.pid(), "Groups"), "");
+
     const auto expectAction = [&](const Broker::Request& request, const char* what)
     {
         const auto reply = roundTrip(pair.client(), id++, request);
