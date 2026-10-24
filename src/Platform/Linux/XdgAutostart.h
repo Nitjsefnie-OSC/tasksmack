@@ -32,6 +32,10 @@ struct Entry
     std::vector<std::string> onlyShowIn; ///< OnlyShowIn: the desktops it starts in, when given
     std::vector<std::string> notShowIn;  ///< NotShowIn: the desktops it doesn't start in
     bool application = true;             ///< Type=Application (or no Type)
+    bool noDisplay = false;              ///< NoDisplay=true: not shown in menus or startup lists
+    /// Started by the session itself, not a user's startup app: X-GNOME-Autostart-Phase given (accessibility,
+    /// settings daemons, xdg-user-dirs), or X-GNOME-HiddenUnderSystemd=true (systemd starts it instead).
+    bool sessionComponent = false;
 
     /// Whether the entry is switched on: not Hidden, and not X-GNOME-Autostart-enabled=false.
     [[nodiscard]] bool enabled() const noexcept
@@ -57,9 +61,21 @@ struct Entry
     return words;
 }
 
+/// @p text without a leading UTF-8 byte order mark, which GLib's key file reader also skips.
+[[nodiscard]] constexpr std::string_view withoutBom(std::string_view text) noexcept
+{
+    constexpr std::string_view BOM = "\xEF\xBB\xBF";
+    if (text.starts_with(BOM))
+    {
+        text.remove_prefix(BOM.size());
+    }
+    return text;
+}
+
 /// The [Desktop Entry] group of an autostart file's @p text; nullopt when it has none.
 [[nodiscard]] inline std::optional<Entry> parse(std::string_view text)
 {
+    text = withoutBom(text);
     Entry entry;
     bool inMainGroup = false;
     bool sawMainGroup = false;
@@ -121,6 +137,18 @@ struct Entry
         {
             entry.application = (value == "Application");
         }
+        else if (key == "NoDisplay")
+        {
+            entry.noDisplay = (value == "true");
+        }
+        else if (key == "X-GNOME-Autostart-Phase")
+        {
+            entry.sessionComponent = entry.sessionComponent || !value.empty();
+        }
+        else if (key == "X-GNOME-HiddenUnderSystemd")
+        {
+            entry.sessionComponent = entry.sessionComponent || value == "true";
+        }
     }
     if (!sawMainGroup)
     {
@@ -130,30 +158,34 @@ struct Entry
 }
 
 /// Whether @p entry starts in the session whose $XDG_CURRENT_DESKTOP is @p currentDesktops (a
-/// ':'-separated list, "ubuntu:GNOME"): one of them is in OnlyShowIn, when given, and none is in
-/// NotShowIn. With no desktop named, an OnlyShowIn entry doesn't start.
+/// ':'-separated list, "ubuntu:GNOME"), as the Desktop Entry Specification says: the desktops in order, the
+/// first one named in OnlyShowIn (starts) or NotShowIn (doesn't) decides; named in neither, it starts
+/// unless it has an OnlyShowIn. With no desktop named, an OnlyShowIn entry doesn't start.
 [[nodiscard]] inline bool startsIn(const Entry& entry, std::string_view currentDesktops)
 {
-    const std::vector<std::string> desktops = splitList(currentDesktops, ':');
-    const auto named = [&desktops](const std::vector<std::string>& list)
+    const auto listed = [](const std::vector<std::string>& list, const std::string& desktop)
     {
-        for (const std::string& desktop : desktops)
+        for (const std::string& name : list)
         {
-            for (const std::string& listed : list)
+            if (name == desktop)
             {
-                if (listed == desktop)
-                {
-                    return true;
-                }
+                return true;
             }
         }
         return false;
     };
-    if (!entry.onlyShowIn.empty() && !named(entry.onlyShowIn))
+    for (const std::string& desktop : splitList(currentDesktops, ':'))
     {
-        return false;
+        if (listed(entry.onlyShowIn, desktop))
+        {
+            return true;
+        }
+        if (listed(entry.notShowIn, desktop))
+        {
+            return false;
+        }
     }
-    return !named(entry.notShowIn);
+    return entry.onlyShowIn.empty();
 }
 
 /// Where autostart files are looked for, the user's first: $XDG_CONFIG_HOME/autostart (else
@@ -192,27 +224,33 @@ struct Dirs
 /// [Desktop Entry] group.
 [[nodiscard]] inline std::optional<std::string> withEnabled(std::string_view text, bool enabled)
 {
-    const std::string hiddenLine = enabled ? "Hidden=false" : "Hidden=true";
-    const std::string gnomeLine = enabled ? "X-GNOME-Autostart-enabled=true" : "X-GNOME-Autostart-enabled=false";
-    std::string out;
-    out.reserve(text.size() + hiddenLine.size() + 1);
+    // A byte order mark is kept, and the file's own line ending (CRLF or LF) is used for the lines written.
+    const std::string_view bom = text.substr(0, text.size() - withoutBom(text).size());
+    text = withoutBom(text);
+    const std::string_view eol = text.contains("\r\n") ? std::string_view("\r\n") : std::string_view("\n");
+    const std::string hiddenLine = std::string(enabled ? "Hidden=false" : "Hidden=true").append(eol);
+    const std::string gnomeLine = std::string(enabled ? "X-GNOME-Autostart-enabled=true" : "X-GNOME-Autostart-enabled=false").append(eol);
+    std::string out(bom);
+    out.reserve(bom.size() + text.size() + hiddenLine.size() + eol.size());
     bool inMainGroup = false;
     bool sawMainGroup = false;
     bool wroteHidden = false;
     while (!text.empty())
     {
         const std::size_t newline = text.find('\n');
-        const std::string_view rawLine = text.substr(0, newline);
-        text.remove_prefix(newline == std::string_view::npos ? text.size() : newline + 1);
+        // Each line with its own ending, so the file's are kept as they were.
+        const std::string_view rawLine = text.substr(0, newline == std::string_view::npos ? text.size() : newline + 1);
+        text.remove_prefix(rawLine.size());
         const std::string_view line = trimAscii(rawLine);
+        const std::string_view ending = rawLine.ends_with('\n') ? std::string_view{} : eol; // the last line gains one
         if (!line.empty() && line.front() == '[')
         {
             inMainGroup = (line == "[Desktop Entry]");
-            out.append(rawLine).push_back('\n');
+            out.append(rawLine).append(ending);
             if (inMainGroup && !sawMainGroup)
             {
                 sawMainGroup = true;
-                out.append(hiddenLine).push_back('\n');
+                out.append(hiddenLine);
                 wroteHidden = true;
             }
             continue;
@@ -227,11 +265,11 @@ struct Dirs
             }
             if (key == "X-GNOME-Autostart-enabled")
             {
-                out.append(gnomeLine).push_back('\n');
+                out.append(gnomeLine);
                 continue;
             }
         }
-        out.append(rawLine).push_back('\n');
+        out.append(rawLine).append(ending);
     }
     if (!wroteHidden)
     {

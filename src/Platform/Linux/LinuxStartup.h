@@ -21,8 +21,9 @@ class LinuxStartupProbe final : public IStartupProbe
   public:
     /// From the environment ($HOME, $XDG_CONFIG_HOME, $XDG_CONFIG_DIRS, $XDG_CURRENT_DESKTOP), read here.
     LinuxStartupProbe();
-    /// Test seam: these directories, and @p currentDesktops for OnlyShowIn and NotShowIn.
-    LinuxStartupProbe(XdgAutostart::Dirs dirs, std::string currentDesktops);
+    /// Test seam: these directories, @p currentDesktops for OnlyShowIn and NotShowIn, and @p searchPath
+    /// (a $PATH) to find an Exec's program on.
+    LinuxStartupProbe(XdgAutostart::Dirs dirs, std::string currentDesktops, std::string searchPath);
 
     [[nodiscard]] StartupCapabilities capabilities() const override;
     [[nodiscard]] std::vector<StartupEntry> enumerate() override;

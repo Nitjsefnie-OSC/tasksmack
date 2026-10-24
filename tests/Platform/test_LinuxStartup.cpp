@@ -16,12 +16,16 @@
 #include <iterator>
 #include <optional>
 #include <string>
+#include <system_error>
 #include <vector>
 
 namespace Platform
 {
 namespace
 {
+
+/// Where the tests' programs (sh) are found, rather than this machine's $PATH.
+constexpr const char* SEARCH_PATH = "/usr/bin:/bin";
 
 void writeText(const std::filesystem::path& path, const std::string& text)
 {
@@ -87,6 +91,32 @@ TEST(XdgAutostartTest, TheDesktopFiltersFollowXdgCurrentDesktop)
     EXPECT_TRUE(XdgAutostart::startsIn(entry, "XFCE"));
 }
 
+// The Desktop Entry Specification's rule: the desktops in order, the first one either list names decides.
+TEST(XdgAutostartTest, TheFirstDesktopEitherListNamesDecides)
+{
+    XdgAutostart::Entry entry;
+    entry.onlyShowIn = {"ubuntu"};
+    entry.notShowIn = {"GNOME"};
+    EXPECT_TRUE(XdgAutostart::startsIn(entry, "ubuntu:GNOME"));
+    EXPECT_FALSE(XdgAutostart::startsIn(entry, "GNOME:ubuntu"));
+}
+
+TEST(XdgAutostartTest, AByteOrderMarkAndCrlfLineEndingsAreKept)
+{
+    const std::string text = "\xEF\xBB\xBF[Desktop Entry]\r\nName=Tool\r\nExec=tool\r\nX-GNOME-Autostart-enabled=true\r\n";
+    EXPECT_EQ(parsed(text).name, "Tool");
+    EXPECT_EQ(XdgAutostart::withEnabled(text, false).value_or(""),
+              "\xEF\xBB\xBF[Desktop Entry]\r\nHidden=true\r\nName=Tool\r\nExec=tool\r\nX-GNOME-Autostart-enabled=false\r\n");
+}
+
+TEST(XdgAutostartTest, SessionComponentsAreMarked)
+{
+    EXPECT_TRUE(parsed("[Desktop Entry]\nExec=a\nX-GNOME-Autostart-Phase=Initialization\n").sessionComponent);
+    EXPECT_TRUE(parsed("[Desktop Entry]\nExec=a\nX-GNOME-HiddenUnderSystemd=true\n").sessionComponent);
+    EXPECT_TRUE(parsed("[Desktop Entry]\nExec=a\nNoDisplay=true\n").noDisplay);
+    EXPECT_FALSE(parsed("[Desktop Entry]\nExec=a\n").sessionComponent);
+}
+
 TEST(XdgAutostartTest, TheDirectoriesFollowTheBaseDirectorySpecification)
 {
     const XdgAutostart::Dirs defaults = XdgAutostart::dirs("/home/u", "", "");
@@ -128,7 +158,7 @@ TEST_F(LinuxStartupTest, ListsEachFileNameOnceTheUsersWinning)
     writeText(m_Dirs.user / "link.desktop", "[Desktop Entry]\nType=Link\nURL=https://example.org\n");
     writeText(m_Dirs.user / "notes.txt", "not an autostart file");
 
-    LinuxStartupProbe probe(m_Dirs, "GNOME");
+    LinuxStartupProbe probe(m_Dirs, "GNOME", SEARCH_PATH);
     EXPECT_TRUE(probe.capabilities().canEnumerate);
     const std::vector<StartupEntry> entries = probe.enumerate();
     EXPECT_EQ(entries.size(), 4U) << "the link and the .txt aren't listed";
@@ -165,7 +195,7 @@ TEST_F(LinuxStartupTest, DisablingASystemEntryWritesAUserCopyAndEnablingRemovesI
 {
     const std::string systemText = "[Desktop Entry]\nType=Application\nName=Updater\nExec=/bin/sh\n";
     writeText(m_Dirs.system[0] / "updater.desktop", systemText);
-    LinuxStartupProbe probe(m_Dirs, "GNOME");
+    LinuxStartupProbe probe(m_Dirs, "GNOME", SEARCH_PATH);
     LinuxStartupActions actions(m_Dirs);
     EXPECT_TRUE(actions.capabilities().canSetEnabled);
     EXPECT_FALSE(actions.capabilities().machineEntriesNeedElevation);
@@ -186,7 +216,7 @@ TEST_F(LinuxStartupTest, EnablingAnEditedCopyKeepsItWithHiddenFalse)
 {
     writeText(m_Dirs.system[0] / "chat.desktop", "[Desktop Entry]\nName=Chat\nExec=/bin/sh\n");
     writeText(m_Dirs.user / "chat.desktop", "[Desktop Entry]\nName=Chat\nExec=/bin/sh --minimized\nHidden=true\n");
-    LinuxStartupProbe probe(m_Dirs, "");
+    LinuxStartupProbe probe(m_Dirs, "", SEARCH_PATH);
     LinuxStartupActions actions(m_Dirs);
     ASSERT_TRUE(actions.setEnabled(*find(probe.enumerate(), "chat.desktop"), true).ok);
     const std::string text = readText(m_Dirs.user / "chat.desktop");
@@ -197,12 +227,77 @@ TEST_F(LinuxStartupTest, EnablingAnEditedCopyKeepsItWithHiddenFalse)
 TEST_F(LinuxStartupTest, AUserEntryIsSwitchedInPlace)
 {
     writeText(m_Dirs.user / "own.desktop", "[Desktop Entry]\nName=Own\nExec=/bin/sh\nX-GNOME-Autostart-enabled=false\n");
-    LinuxStartupProbe probe(m_Dirs, "GNOME");
+    LinuxStartupProbe probe(m_Dirs, "GNOME", SEARCH_PATH);
     LinuxStartupActions actions(m_Dirs);
     EXPECT_FALSE(find(probe.enumerate(), "own.desktop")->enabled);
     ASSERT_TRUE(actions.setEnabled(*find(probe.enumerate(), "own.desktop"), true).ok);
     EXPECT_TRUE(find(probe.enumerate(), "own.desktop")->enabled);
     EXPECT_TRUE(readText(m_Dirs.user / "own.desktop").contains("X-GNOME-Autostart-enabled=true"));
+}
+
+// The usual way to hide a system entry is a stub with no Exec. Enabling it makes a working copy (here,
+// since the stub is all the user has, removed: the system file applies again).
+TEST_F(LinuxStartupTest, EnablingAStubWithoutExecBringsTheSystemEntryBack)
+{
+    writeText(m_Dirs.system[0] / "tray.desktop", "[Desktop Entry]\nName=Tray\nExec=/bin/sh\n");
+    writeText(m_Dirs.user / "tray.desktop", "[Desktop Entry]\nHidden=true\n");
+    LinuxStartupProbe probe(m_Dirs, "GNOME", SEARCH_PATH);
+    const std::vector<StartupEntry> entries = probe.enumerate();
+    const StartupEntry* listed = find(entries, "tray.desktop");
+    ASSERT_NE(listed, nullptr);
+    EXPECT_EQ(listed->name, "Tray") << "the system file's name, not the stub's file name";
+    EXPECT_FALSE(listed->enabled);
+    LinuxStartupActions actions(m_Dirs);
+    ASSERT_TRUE(actions.setEnabled(*listed, true).ok);
+    EXPECT_FALSE(std::filesystem::exists(m_Dirs.user / "tray.desktop"));
+    EXPECT_TRUE(find(probe.enumerate(), "tray.desktop")->enabled);
+
+    // A stub that only says Hidden=false still hides it: the session drops a file with no Exec.
+    writeText(m_Dirs.user / "tray.desktop", "[Desktop Entry]\nHidden=false\n");
+    EXPECT_FALSE(find(probe.enumerate(), "tray.desktop")->enabled);
+}
+
+TEST_F(LinuxStartupTest, SessionComponentsCantBeSwitched)
+{
+    writeText(m_Dirs.system[0] / "at-spi.desktop",
+              "[Desktop Entry]\nName=AT-SPI\nExec=/bin/sh\nNoDisplay=true\nX-GNOME-Autostart-Phase=Initialization\n");
+    LinuxStartupProbe probe(m_Dirs, "GNOME", SEARCH_PATH);
+    const std::vector<StartupEntry> entries = probe.enumerate();
+    const StartupEntry* entry = find(entries, "at-spi.desktop");
+    ASSERT_NE(entry, nullptr);
+    EXPECT_TRUE(entry->enabled);
+    EXPECT_EQ(entry->notSwitchableReason, "Part of the desktop session");
+}
+
+TEST_F(LinuxStartupTest, TheProgramSkipsAssignmentsAndEnv)
+{
+    writeText(m_Dirs.user / "a.desktop", "[Desktop Entry]\nExec=LD_LIBRARY_PATH=/opt/x/lib /bin/sh --flag\n");
+    writeText(m_Dirs.user / "b.desktop", "[Desktop Entry]\nExec=env -u X FOO=1 sh -c true\n");
+    LinuxStartupProbe probe(m_Dirs, "", SEARCH_PATH);
+    const std::vector<StartupEntry> entries = probe.enumerate();
+    EXPECT_EQ(find(entries, "a.desktop")->executablePath, "/bin/sh");
+    EXPECT_TRUE(find(entries, "b.desktop")->executablePath.ends_with("/sh")) << find(entries, "b.desktop")->executablePath;
+    EXPECT_TRUE(find(entries, "a.desktop")->iconPath.empty()) << "the icon comes from the program";
+}
+
+TEST_F(LinuxStartupTest, ASymlinkedUserFileIsntReplaced)
+{
+    writeText(m_Root.path / "dotfiles/link.desktop", "[Desktop Entry]\nExec=/bin/sh\n");
+    std::filesystem::create_directories(m_Dirs.user);
+    std::error_code ec;
+    std::filesystem::create_symlink(m_Root.path / "dotfiles/link.desktop", m_Dirs.user / "link.desktop", ec);
+    if (ec)
+    {
+        GTEST_SKIP() << "no symlinks here";
+    }
+    LinuxStartupProbe probe(m_Dirs, "", SEARCH_PATH);
+    LinuxStartupActions actions(m_Dirs);
+    const std::vector<StartupEntry> entries = probe.enumerate();
+    ASSERT_NE(find(entries, "link.desktop"), nullptr);
+    const StartupActionResult result = actions.setEnabled(*find(entries, "link.desktop"), false);
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.message.contains("symbolic link")) << result.message;
+    EXPECT_TRUE(std::filesystem::is_symlink(m_Dirs.user / "link.desktop"));
 }
 
 TEST_F(LinuxStartupTest, ANameThatIsntAnAutostartFileIsRefused)
