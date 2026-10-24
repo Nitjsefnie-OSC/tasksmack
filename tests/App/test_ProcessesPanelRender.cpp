@@ -46,6 +46,7 @@
 #include <imgui.h>
 #include <imgui_internal.h>
 #include <implot.h>
+#include <toml++/toml.hpp>
 
 #include <algorithm>
 #include <atomic>
@@ -59,6 +60,7 @@
 #include <memory>
 #include <optional>
 #include <regex>
+#include <sstream>
 #include <string>
 #include <string_view>
 #include <thread>
@@ -2032,7 +2034,124 @@ TEST_F(ProcessesPanelRenderTest, TheTreeExpanderSitsInTheNameColumn)
     EXPECT_TRUE(text.contains("init")) << text;
     EXPECT_FALSE(text.contains("server")) << text;
     EXPECT_FALSE(text.contains("worker")) << text;
+
+    // #2713: a second click on the expander opens the branch again.
+    clickAtPoint(*panel, name.MinX + ImGui::GetStyle().CellPadding.x + (ImGui::GetFontSize() * 0.5F), rootMiddle);
+    const std::string reopened = renderAndCapture(*panel);
+    EXPECT_TRUE(reopened.contains("server")) << reopened;
+    EXPECT_TRUE(reopened.contains("worker")) << reopened;
     panel->onDetach();
+}
+
+// #2713 (a #2700 manual check): a column dragged to a new place and one widened by its border, both with
+// the mouse through the panel, come back the same once the layout has gone through config.toml into a
+// fresh panel and a fresh ImGui context -- the sort with them.
+TEST_F(ProcessesPanelRenderTest, ColumnsReorderedAndResizedByMouseSurviveARestart)
+{
+    // Frames in a window that keeps settings, as the app's does: a table in a NoSavedSettings window (the
+    // other tests' "Shell") saves none.
+    const auto frame = [](ProcessesPanel& shown)
+    {
+        ImGui::NewFrame();
+        ImGui::SetNextWindowPos(ImVec2(0.0F, 0.0F));
+        ImGui::SetNextWindowSize(ImVec2(DISPLAY_WIDTH, DISPLAY_HEIGHT));
+        ImGui::Begin("SavingShell", nullptr, ImGuiWindowFlags_NoDecoration);
+        shown.renderContent();
+        ImGui::End();
+        ImGui::Render();
+    };
+    // Until it has read all three processes (the sampler runs on its own thread), then a frame to draw them.
+    const auto load = [&frame](ProcessesPanel& shown)
+    {
+        for (int drawn = 0; drawn < LOAD_FRAMES && shown.processCount() < 3; ++drawn)
+        {
+            frame(shown);
+            std::this_thread::sleep_for(std::chrono::milliseconds(10));
+        }
+        frame(shown);
+        frame(shown);
+    };
+    auto panel = attachedPanel();
+    load(*panel);
+    const ImGuiTable* table = processTable();
+    ASSERT_NE(table, nullptr);
+    const auto pidIndex = static_cast<int>(toIndex(ProcessColumn::PID));
+    const auto nameIndex = static_cast<int>(toIndex(ProcessColumn::Name));
+    ASSERT_LT(table->Columns[pidIndex].DisplayOrder, table->Columns[nameIndex].DisplayOrder) << "PID before Name, as by default";
+    const float headerY = table->OuterRect.Min.y + ImGui::GetStyle().CellPadding.y + (ImGui::GetTextLineHeight() * 0.5F);
+    ImGuiIO& io = ImGui::GetIO();
+    // Presses at (@p fromX, headerY), moves to @p toX in steps, and releases, a frame or two each.
+    const auto dragHeader = [&](float fromX, float toX)
+    {
+        io.AddMousePosEvent(fromX, headerY);
+        frame(*panel);
+        frame(*panel);
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, true);
+        frame(*panel);
+        for (int step = 1; step <= 10; ++step)
+        {
+            io.AddMousePosEvent(fromX + ((toX - fromX) * static_cast<float>(step) / 10.0F), headerY);
+            frame(*panel);
+        }
+        io.AddMouseButtonEvent(ImGuiMouseButton_Left, false);
+        frame(*panel);
+        frame(*panel);
+    };
+
+    // Name's header dragged onto PID's: Name goes first.
+    const ImGuiTableColumn& pid = table->Columns[pidIndex];
+    const ImGuiTableColumn& name = table->Columns[nameIndex];
+    dragHeader((name.MinX + name.MaxX) * 0.5F, pid.MinX + 2.0F);
+    ASSERT_LT(name.DisplayOrder, pid.DisplayOrder) << "the drag reordered them";
+
+    // PID's right border dragged 40 px right: wider.
+    const float widthBefore = pid.WidthGiven;
+    dragHeader(pid.MaxX - 1.0F, pid.MaxX + 39.0F);
+    EXPECT_GT(pid.WidthGiven, widthBefore + 20.0F) << "the border drag widened it";
+    const int nameOrder = name.DisplayOrder;
+    const int pidOrder = pid.DisplayOrder;
+    const float pidWidth = pid.WidthGiven;
+
+    const std::string layout = panel->captureTableLayout();
+    ASSERT_FALSE(layout.empty());
+    panel->onDetach();
+    panel.reset();
+
+    // Through config.toml, as the writer writes it and load() reads it.
+    std::ostringstream file;
+    file << toml::table{{"process_table", toml::table{{"layout", layout}}}};
+    UserSettings loaded;
+    ASSERT_TRUE(UserConfig::parseSettings(file.str(), loaded));
+    ASSERT_EQ(loaded.processTableLayout, layout);
+
+    // A fresh context remembers nothing of the table; only the stored layout can put it back.
+    ImGuiContext* original = ImGui::GetCurrentContext();
+    ImPlotContext* originalPlot = ImPlot::GetCurrentContext();
+    ImGuiContext* fresh = ImGui::CreateContext();
+    ImGui::SetCurrentContext(fresh);
+    ImPlotContext* freshPlot = ImPlot::CreateContext();
+    ImGuiIO& freshIo = ImGui::GetIO();
+    freshIo.IniFilename = nullptr;
+    freshIo.LogFilename = nullptr;
+    freshIo.DisplaySize = ImVec2(DISPLAY_WIDTH, DISPLAY_HEIGHT);
+    freshIo.DeltaTime = 1.0F / 60.0F;
+    freshIo.BackendFlags |= ImGuiBackendFlags_RendererHasTextures | ImGuiBackendFlags_RendererHasVtxOffset;
+    freshIo.Fonts->AddFontDefault();
+    ProcessesPanel::restoreTableLayout(loaded.processTableLayout);
+    auto restarted = attachedPanel();
+    load(*restarted);
+    const ImGuiTable* restored = processTable();
+    ASSERT_NE(restored, nullptr);
+    EXPECT_EQ(restored->Columns[nameIndex].DisplayOrder, nameOrder);
+    EXPECT_EQ(restored->Columns[pidIndex].DisplayOrder, pidOrder);
+    EXPECT_NEAR(restored->Columns[pidIndex].WidthGiven, pidWidth, 1.0F);
+    EXPECT_EQ(restarted->captureTableLayout(), layout) << "the same layout, its sort included";
+    restarted->onDetach();
+    restarted.reset();
+    ImPlot::DestroyContext(freshPlot);
+    ImGui::DestroyContext(fresh);
+    ImGui::SetCurrentContext(original);
+    ImPlot::SetCurrentContext(originalPlot);
 }
 
 // #838 audit (#852, #1138): the tree view goes through ImGuiListClipper, so only the rows in view
