@@ -1125,6 +1125,10 @@ code-change fuzzing job (`cflite_pr.yml`'s path filter); pushes to `main` touchi
 refresh the baseline build (`cflite_build.yml`). The two lists are kept by hand, since a `paths:` filter
 can't be shared between workflows; when a new target adds a parser, add its paths to both, and the
 `check-cflite-paths` pre-commit hook fails if they differ (#2533). Separate weekly jobs perform a longer batch run and prune the resulting corpus.
+The weekly batch run (`cflite_batch.yml`) shares 900 seconds across every target, under a minute each.
+A release candidate's campaign gives each target 600 seconds instead (#2783):
+`gh workflow run cflite_batch.yml --ref <candidate branch> -f campaign=release`, then quote the run's
+summary line (targets, total and per-target seconds) in the release's fuzzing record.
 `.clusterfuzzlite/build.sh` builds every target (ClusterFuzzLite runs each binary it leaves in
 `$OUT`), so a new target is a `tests/fuzz/fuzz_<name>.cpp` plus one `build_fuzzer` line there. The
 targets compile against the header-only toml++, spdlog, Dear ImGui and ImPlot at the commits
@@ -2670,8 +2674,12 @@ opens PRs; the same CI gate applies before merge.
     `tools/setup-dev.sh`. Update by hand in the same PR: the "3.14" in this guide's setup commands and in
     `requirements.txt`'s header.
   - **CMake, Ninja and ccache** pins in `tools/setup-dev.ps1` (`$CMakeVersion`, `$NinjaVersion`,
-    `$CcacheVersion`). CMake and Ninja match the `windows-2025` runner image. WinGet's feed lags upstream
-    and no CI job runs this script, so confirm WinGet has the version before approving.
+    `$CcacheVersion`). Ninja matches the `windows-2025` runner image; CMake is the newest version WinGet
+    carries, since its catalog dropped every 3.x, the image's 3.31.x included (#2844). WinGet's feed lags
+    upstream, keeps only recent versions, and no CI job installs with this script, so confirm WinGet has
+    the version before approving. A pin WinGet no longer carries doesn't stop the script: it installs
+    WinGet's newest version with a warning that names the pin to move, so a stale pin shows up on a
+    clean machine as that warning, not as a failed setup.
 - *Tier 3, manual:* tools that ride the OS, runner or SDK rather than their own releases (`wpr`, `xperf`,
   `wpa`, CPack's NSIS/dpkg/rpmbuild, `gh`, `xvfb`), and optional local-only tools (Inkscape, heaptrack,
   FlameGraph, hotspot).
